@@ -5,15 +5,15 @@ from flask import Flask
 from threading import Thread
 
 # ================= APNI DETAILS YAHAN DAALO =================
-TG_TOKEN = "9084884390:AAER1W7o63uWPGu3d5T-NrTZTOIN-In6oPs"   # Yahan apna Bot Token daalo
-TG_CHAT_ID = "762295473"   # Yahan apni Chat ID daalo
+TG_TOKEN = "YOUR_BOT_TOKEN"   # Yahan apna Bot Token daalo
+TG_CHAT_ID = "YOUR_CHAT_ID"   # Yahan apni Chat ID daalo
 # ============================================================
 
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Market Scanner is Running 24/7!"
+    return "CoinDCX Market Scanner is Running 24/7!"
 
 def run():
     app.run(host='0.0.0.0', port=8080)
@@ -24,7 +24,7 @@ def keep_alive():
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    payload = {"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "Markdown"}
+    payload = {"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
     try:
         requests.post(url, json=payload)
     except Exception as e:
@@ -43,26 +43,35 @@ def calculate_indicators(df):
     return df
 
 def scan_market():
-    print("Fetching ALL active coins from Binance...")
+    print("Fetching active coins from CoinDCX...")
     try:
-        res = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=10)
+        res = requests.get("https://api.coindcx.com/exchange/ticker", timeout=10)
         data = res.json()
         
-        # POORA MARKET: Jinka volume $1 Million se zyada hai (taaki dead coins skip ho)
-        all_coins = [c['symbol'] for c in data if c['symbol'].endswith("USDT") and float(c['quoteVolume']) > 1000000]
+        all_coins = []
+        for c in data:
+            if c['market'].endswith("_USDT"):
+                try:
+                    vol = float(c.get('volume', 0))
+                    if vol > 10000:
+                        all_coins.append(c['market'])
+                except:
+                    all_coins.append(c['market'])
         
-        print(f"Total {len(all_coins)} coins to scan.")
+        print(f"Total {len(all_coins)} CoinDCX coins to scan.")
 
         for sym in all_coins:
             try:
-                k_res = requests.get(f"https://fapi.binance.com/fapi/v1/klines?symbol={sym}&interval=15m&limit=200", timeout=10)
+                k_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={sym}&interval=15m&limit=200", timeout=10)
                 k_data = k_res.json()
                 
-                if len(k_data) < 200: 
+                if not isinstance(k_data, list) or len(k_data) < 200: 
                     time.sleep(0.2)
                     continue
                 
-                df = pd.DataFrame(k_data, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'tbbav', 'tbqav', 'ignore'])
+                k_data.reverse()
+                
+                df = pd.DataFrame(k_data)
                 df['close'] = df['close'].astype(float)
                 df['volume'] = df['volume'].astype(float)
                 
@@ -91,15 +100,43 @@ def scan_market():
                     signal = "SELL"
                     
                 if signal:
-                    text = f"🚨 *STRONG {signal}* 🚨\n\n🪙 *Coin:* {sym}\n💰 *Price:* {current_price:.4f}\n📊 *RSI:* {rsi:.2f}\n⏱️ *TF:* 15m\n\n_Cloud Bot Signal_"
+                    entry = current_price
+                    if signal == "BUY":
+                        sl = entry * 0.99      
+                        tp1 = entry * 1.01     
+                        tp2 = entry * 1.02     
+                        tp3 = entry * 1.03     
+                    else:
+                        sl = entry * 1.01      
+                        tp1 = entry * 0.99     
+                        tp2 = entry * 0.98     
+                        tp3 = entry * 0.97     
+                    
+                    # COINDCX DIRECT LINK
+                    clean_sym = sym.replace("B-", "").replace("_", "")
+                    dcx_link = f"https://coindcx.com/trade/{clean_sym}"
+
+                    # TELEGRAM MESSAGE
+                    text = (
+                        f"🚨 *STRONG {signal} (CoinDCX)* 🚨\n\n"
+                        f"🪙 *Coin:* [{clean_sym}]({dcx_link})\n"
+                        f"💰 *Entry:* {entry:.4f}\n"
+                        f"🛑 *SL:* {sl:.4f}\n"
+                        f"🎯 *TP1:* {tp1:.4f}\n"
+                        f"🎯 *TP2:* {tp2:.4f}\n"
+                        f"🎯 *TP3:* {tp3:.4f}\n"
+                        f"📊 *RSI:* {rsi:.2f}\n"
+                        f"⏱️ *TF:* 15m\n\n"
+                        f"_Click the coin name to open CoinDCX chart_"
+                    )
+                    
                     send_telegram(text)
-                    print(f"Signal Sent: {sym} {signal}")
+                    print(f"Signal Sent: {clean_sym} {signal}")
                     
             except Exception as e:
                 print(f"Error on {sym}: {e}")
             
-            # API Ban se bachne ke liye 0.3 second ka break
-            time.sleep(0.3) 
+            time.sleep(0.4) 
             
     except Exception as e:
         print("Scan Error:", e)
@@ -109,5 +146,5 @@ if __name__ == "__main__":
     print("Bot Started!")
     while True:
         scan_market()
-        print("Full market scan complete. Waiting 2 minutes for next round...")
-        time.sleep(120) # Poora market scan hone ke baad 2 minute rest
+        print("Full CoinDCX scan complete. Waiting 2 minutes...")
+        time.sleep(120)
