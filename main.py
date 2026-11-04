@@ -13,7 +13,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is running 24/7!"
+    return "Market Scanner is Running 24/7!"
 
 def run():
     app.run(host='0.0.0.0', port=8080)
@@ -31,38 +31,36 @@ def send_telegram(text):
         print("TG Error:", e)
 
 def calculate_indicators(df):
-    # EMA 200
     df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
-    # RSI 14
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
-    # MACD
     df['ema12'] = df['close'].ewm(span=12, adjust=False).mean()
     df['ema26'] = df['close'].ewm(span=26, adjust=False).mean()
     df['macd'] = df['ema12'] - df['ema26']
     return df
 
 def scan_market():
-    print("Fetching top movers...")
+    print("Fetching ALL active coins from Binance...")
     try:
         res = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=10)
         data = res.json()
         
-        # Top 15 volatile coins (Volume > $10M)
-        movers = [c for c in data if c['symbol'].endswith("USDT") and float(c['quoteVolume']) > 10000000]
-        movers.sort(key=lambda x: abs(float(x['priceChangePercent'])), reverse=True)
-        top_15 = [c['symbol'] for c in movers[:15]]
+        # POORA MARKET: Jinka volume $1 Million se zyada hai (taaki dead coins skip ho)
+        all_coins = [c['symbol'] for c in data if c['symbol'].endswith("USDT") and float(c['quoteVolume']) > 1000000]
         
-        for sym in top_15:
+        print(f"Total {len(all_coins)} coins to scan.")
+
+        for sym in all_coins:
             try:
-                # Get 15m klines
                 k_res = requests.get(f"https://fapi.binance.com/fapi/v1/klines?symbol={sym}&interval=15m&limit=200", timeout=10)
                 k_data = k_res.json()
                 
-                if len(k_data) < 200: continue
+                if len(k_data) < 200: 
+                    time.sleep(0.2)
+                    continue
                 
                 df = pd.DataFrame(k_data, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'tbbav', 'tbqav', 'ignore'])
                 df['close'] = df['close'].astype(float)
@@ -93,14 +91,16 @@ def scan_market():
                     signal = "SELL"
                     
                 if signal:
-                    text = f"?? *STRONG {signal}* ??\n\n?? *Coin:* {sym}\n?? *Price:* {current_price:.4f}\n?? *RSI:* {rsi:.2f}\n?? *TF:* 15m\n\n_Cloud Bot Signal_"
+                    text = f"🚨 *STRONG {signal}* 🚨\n\n🪙 *Coin:* {sym}\n💰 *Price:* {current_price:.4f}\n📊 *RSI:* {rsi:.2f}\n⏱️ *TF:* 15m\n\n_Cloud Bot Signal_"
                     send_telegram(text)
                     print(f"Signal Sent: {sym} {signal}")
                     
             except Exception as e:
-                pass
+                print(f"Error on {sym}: {e}")
             
-            time.sleep(2) # API limit safe
+            # API Ban se bachne ke liye 0.3 second ka break
+            time.sleep(0.3) 
+            
     except Exception as e:
         print("Scan Error:", e)
 
@@ -109,4 +109,5 @@ if __name__ == "__main__":
     print("Bot Started!")
     while True:
         scan_market()
-        time.sleep(60) # Har 1 minute mein market scan karega
+        print("Full market scan complete. Waiting 2 minutes for next round...")
+        time.sleep(120) # Poora market scan hone ke baad 2 minute rest
