@@ -5,8 +5,8 @@ from flask import Flask
 from threading import Thread
 
 # ================= APNI DETAILS YAHAN DAALO =================
-TG_TOKEN = "YOUR_BOT_TOKEN"   # Yahan apna Bot Token daalo
-TG_CHAT_ID = "YOUR_CHAT_ID"   # Yahan apni Chat ID daalo
+TG_TOKEN = "9084884390:AAER1W7o63uWPGu3d5T-NrTZTOIN-In6oPs"   # Yahan apna Bot Token daalo
+TG_CHAT_ID = "762295473"   # Yahan apni Chat ID daalo
 # ============================================================
 
 app = Flask('')
