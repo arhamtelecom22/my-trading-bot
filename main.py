@@ -37,7 +37,7 @@ def send_telegram(text):
 # API Block na ho isliye Headers
 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
-# ---------------- SMART CACHE FOR API (No Rate Limits) ----------------
+# ---------------- SMART CACHE FOR SCANNER ----------------
 last_ticker_data = []
 last_ticker_time = 0
 
@@ -133,47 +133,48 @@ def telegram_commands():
                             send_telegram(f"🤖 *Bot Status: RUNNING*\nActive Trades: {len(active_trades)}")
                         
                         elif text == "/top":
-                            send_telegram("⏳ Fetching top movers...")
+                            send_telegram("⏳ Fetching top movers from CoinDCX...")
                             try:
-                                data = get_ticker_data()
-                                if not data:
-                                    send_telegram("❌ CoinDCX API is not responding. Try again in 1 min.")
+                                # Direct fetch for /top without cache to ensure fresh data
+                                res = requests.get("https://api.coindcx.com/exchange/ticker", headers=headers, timeout=15)
+                                if res.status_code != 200:
+                                    send_telegram(f"❌ API Error: Status {res.status_code}")
                                     continue
                                 
+                                data = res.json()
+                                if not isinstance(data, list) or len(data) == 0:
+                                    send_telegram("❌ API returned no data. Try again in 1 min.")
+                                    continue
+
                                 valid_coins = []
                                 for c in data:
                                     if not isinstance(c, dict): continue
-                                    m = c.get('market', '')
-                                    if m.endswith('_USDT') or m.endswith('_INR'):
-                                        # Robust parsing
+                                    m = str(c.get('market', ''))
+                                    # FIX: Check if USDT or INR is anywhere in the name (handles both B-BTC_USDT and BTCUSDT)
+                                    if 'USDT' in m or 'INR' in m:
                                         raw_ch = c.get('change24hour', 0)
-                                        if raw_ch is None: raw_ch = 0
                                         try:
-                                            # Handles numbers, strings, and removes %, commas if any
-                                            clean_ch = str(raw_ch).replace('%', '').replace(',', '').strip()
-                                            ch = float(clean_ch)
-                                            valid_coins.append({'market': m, 'change': ch})
+                                            ch = float(raw_ch)
                                         except:
-                                            # Agar phir bhi parse na ho, toh 0 daal do taaki list khaali na rahe
-                                            valid_coins.append({'market': m, 'change': 0.0})
+                                            ch = 0.0
+                                        valid_coins.append({'market': m, 'change': ch})
                                 
                                 if not valid_coins:
-                                    send_telegram("⚠️ Data error. No valid coins found.")
+                                    send_telegram(f"⚠️ No USDT/INR pairs found in {len(data)} coins.")
                                     continue
-                                    
-                                top = sorted(valid_coins, key=lambda x: x['change'], reverse=True)[:5]
                                 
+                                top = sorted(valid_coins, key=lambda x: x['change'], reverse=True)[:5]
                                 t_text = "🏆 <b>Top 5 Gainers (24h)</b>\n\n"
                                 for idx, c in enumerate(top):
                                     sym = c['market'].replace("B-", "").replace("I-", "").replace("_", "")
-                                    t_text += f"{idx+1}. <b>{sym}</b>: +{c['change']:.2f}%\n"
+                                    t_text += f"{idx+1}. <b>{sym}</b>: {c['change']:.2f}%\n"
                                 
                                 url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
                                 payload = {"chat_id": TG_CHAT_ID, "text": t_text, "parse_mode": "HTML"}
                                 requests.post(url, json=payload, timeout=10)
                                 
                             except Exception as e:
-                                send_telegram(f"❌ Error: {str(e)[:50]}")
+                                send_telegram(f"❌ Error: {str(e)[:100]}")
 
                         elif text.startswith("/trend"):
                             parts = text.split()
@@ -225,8 +226,9 @@ def scan_market():
         all_coins = []
         for c in data:
             if not isinstance(c, dict): continue
-            market = c.get('market', '')
-            if market.endswith("_USDT") or market.endswith("_INR"):
+            market = str(c.get('market', ''))
+            # FIX: Check if USDT or INR is anywhere in the name
+            if 'USDT' in market or 'INR' in market:
                 try:
                     if float(c.get('volume', 0)) > 20000 and market not in active_trades:
                         all_coins.append(market)
@@ -236,7 +238,18 @@ def scan_market():
 
         for sym in all_coins:
             try:
-                k_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={sym}&interval=15m&limit=200", headers=headers, timeout=10)
+                # Agar sym mein underscore nahi hai, toh candle fetch ke liye format theek karo
+                candle_sym = sym
+                if '_' not in candle_sym and 'USDT' in candle_sym:
+                    candle_sym = candle_sym.replace('USDT', '_USDT')
+                    if not candle_sym.startswith('B-') and not candle_sym.startswith('I-'):
+                        candle_sym = 'B-' + candle_sym
+                elif '_' not in candle_sym and 'INR' in candle_sym:
+                    candle_sym = candle_sym.replace('INR', '_INR')
+                    if not candle_sym.startswith('B-') and not candle_sym.startswith('I-'):
+                        candle_sym = 'I-' + candle_sym
+
+                k_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={candle_sym}&interval=15m&limit=200", headers=headers, timeout=10)
                 k_data = k_res.json()
                 if not isinstance(k_data, list) or len(k_data) < 200: continue
                 k_data.reverse() 
@@ -264,7 +277,7 @@ def scan_market():
                 signal = None
                 
                 if (macd_cross_up and vol_spike) or (macd_cross_down and vol_spike):
-                    h4_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={sym}&interval=4h&limit=100", headers=headers, timeout=10)
+                    h4_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={candle_sym}&interval=4h&limit=100", headers=headers, timeout=10)
                     h4_data = h4_res.json()
                     if not isinstance(h4_data, list) or len(h4_data) < 50: continue
                     h4_data.reverse()
@@ -293,7 +306,7 @@ def scan_market():
 
                     clean_sym = sym.replace("B-", "").replace("I-", "").replace("_", "")
                     dcx_link = f"https://coindcx.com/trade/{clean_sym}"
-                    market_type = "INR" if "_INR" in sym else "USDT"
+                    market_type = "INR" if "INR" in sym else "USDT"
 
                     text = (
                         f"🎯 *SNIPER {signal} SIGNAL ({market_type})* 🎯\n\n"
