@@ -19,6 +19,24 @@ last_signal_time = {}
 watchlist = set()
 SCAN_TIMEFRAME = "15m"
 
+# ---------------- PERMANENT MEMORY (FILE SAVE) ----------------
+def load_active_trades():
+    global active_trades
+    try:
+        if os.path.exists("active_trades.json"):
+            with open("active_trades.json", "r") as f:
+                active_trades = json.load(f)
+            print(f"Loaded {len(active_trades)} active trades from memory.")
+    except Exception as e:
+        print("Error loading trades:", e)
+
+def save_active_trades():
+    try:
+        with open("active_trades.json", "w") as f:
+            json.dump(active_trades, f)
+    except Exception as e:
+        print("Error saving trades:", e)
+
 # ---------------- WEB DASHBOARD ----------------
 @app.route('/')
 def home():
@@ -159,23 +177,28 @@ def monitor_trades():
                         res_text = f"❌ *{clean_sym} Hit STOP LOSS*\nPrice: {curr_price:.4f}"
                         save_to_journal({'date': str(datetime.datetime.now()), 'coin': clean_sym, 'type': 'BUY', 'result': 'LOSS'})
                         del active_trades[sym]
+                        save_active_trades()
                     elif curr_price >= tp3:
                         res_text = f"🚀 *{clean_sym} Hit TP3!*\nTrade Complete."
                         save_to_journal({'date': str(datetime.datetime.now()), 'coin': clean_sym, 'type': 'BUY', 'result': 'WIN'})
                         del active_trades[sym]
+                        save_active_trades()
                     elif curr_price >= tp2 and trade['status'] == "TP1_HIT":
                         trade['sl'] = tp1 
                         trade['status'] = "TP2_HIT"
                         res_text = f"🔥 *{clean_sym} Hit TP2*\nSL moved to TP1."
+                        save_active_trades()
                     elif curr_price >= tp1 and trade['status'] == "OPEN":
                         trade['sl'] = entry 
                         trade['status'] = "TP1_HIT"
                         res_text = f"✅ *{clean_sym} Hit TP1*\nSL moved to Entry."
+                        save_active_trades()
                         
                     if trade.get('status') == "TP2_HIT" and curr_price <= (trade['highest'] * 0.995):
                         res_text = f"🏃‍♂️ *{clean_sym} Trailing TP Hit!*"
                         save_to_journal({'date': str(datetime.datetime.now()), 'coin': clean_sym, 'type': 'BUY', 'result': 'WIN'})
                         del active_trades[sym]
+                        save_active_trades()
 
                 elif signal == "SELL":
                     if curr_price < trade['lowest']: trade['lowest'] = curr_price
@@ -183,23 +206,28 @@ def monitor_trades():
                         res_text = f"❌ *{clean_sym} Hit STOP LOSS*\nPrice: {curr_price:.4f}"
                         save_to_journal({'date': str(datetime.datetime.now()), 'coin': clean_sym, 'type': 'SELL', 'result': 'LOSS'})
                         del active_trades[sym]
+                        save_active_trades()
                     elif curr_price <= tp3:
                         res_text = f"🚀 *{clean_sym} Hit TP3!*\nTrade Complete."
                         save_to_journal({'date': str(datetime.datetime.now()), 'coin': clean_sym, 'type': 'SELL', 'result': 'WIN'})
                         del active_trades[sym]
+                        save_active_trades()
                     elif curr_price <= tp2 and trade['status'] == "TP1_HIT":
                         trade['sl'] = tp1 
                         trade['status'] = "TP2_HIT"
                         res_text = f"🔥 *{clean_sym} Hit TP2*\nSL moved to TP1."
+                        save_active_trades()
                     elif curr_price <= tp1 and trade['status'] == "OPEN":
                         trade['sl'] = entry 
                         trade['status'] = "TP1_HIT"
                         res_text = f"✅ *{clean_sym} Hit TP1*\nSL moved to Entry."
+                        save_active_trades()
                         
                     if trade.get('status') == "TP2_HIT" and curr_price >= (trade['lowest'] * 1.005):
                         res_text = f"🏃‍♂️ *{clean_sym} Trailing TP Hit!*"
                         save_to_journal({'date': str(datetime.datetime.now()), 'coin': clean_sym, 'type': 'SELL', 'result': 'WIN'})
                         del active_trades[sym]
+                        save_active_trades()
                 
                 if res_text: send_telegram(res_text)
         except: pass
@@ -220,12 +248,25 @@ def run_backtest(coin, tf):
         wins, losses = 0, 0
         for i in range(200, len(df)-10):
             row, prev = df.iloc[i], df.iloc[i-1]
-            macd_up = (prev['macd'] < prev['macd_signal']) and (row['macd'] > row['macd_signal'])
-            macd_down = (prev['macd'] > prev['macd_signal']) and (row['macd'] < row['macd_signal'])
+            
+            # Retest logic
+            prev_ema50 = prev['ema50']
+            pullback_buy = abs(prev['low'] - prev_ema50) / prev_ema50 < 0.005
+            bounce_buy = (row['close'] > row['open']) and (row['close'] > prev['high'])
+            
+            pullback_sell = abs(prev['high'] - prev_ema50) / prev_ema50 < 0.005
+            rejection_sell = (row['close'] < row['open']) and (row['close'] < prev['low'])
+            
             vol_spike = row['volume'] > (df['volume'].iloc[i-20:i].mean() * 1.5)
             
             if row['adx'] > 25 and vol_spike:
-                signal = "BUY" if (macd_up and row['close'] > row['ema200'] and row['close'] > row['vwap']) else ("SELL" if (macd_down and row['close'] < row['ema200'] and row['close'] < row['vwap']) else None)
+                if row['ema50'] > row['ema200'] and pullback_buy and bounce_buy and row['close'] > row['vwap'] and row['rsi'] > 50:
+                    signal = "BUY"
+                elif row['ema50'] < row['ema200'] and pullback_sell and rejection_sell and row['close'] < row['vwap'] and row['rsi'] < 50:
+                    signal = "SELL"
+                else:
+                    signal = None
+                    
                 if signal:
                     entry, risk = row['close'], row['atr'] * 2.5
                     outcome = "OPEN"
@@ -402,15 +443,12 @@ def telegram_commands():
 
 # ---------------- INDICATORS ----------------
 def calculate_indicators(df):
+    df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     df['rsi'] = 100 - (100 / (1 + (gain / loss)))
-    df['ema12'] = df['close'].ewm(span=12, adjust=False).mean()
-    df['ema26'] = df['close'].ewm(span=26, adjust=False).mean()
-    df['macd'] = df['ema12'] - df['ema26']
-    df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     
     df['up_move'] = df['high'] - df['high'].shift(1)
     df['down_move'] = df['low'].shift(1) - df['low']
@@ -457,17 +495,26 @@ def scan_market():
                 df = calculate_indicators(df)
                 
                 last, prev = df.iloc[-1], df.iloc[-2]
-                current_price, ema200, rsi, atr, adx, vwap = last['close'], last['ema200'], last['rsi'], last['atr'], last['adx'], last['vwap']
+                current_price = last['close']
+                ema50, ema200, rsi, atr, adx, vwap = last['ema50'], last['ema200'], last['rsi'], last['atr'], last['adx'], last['vwap']
                 
-                macd_up = (prev['macd'] < prev['macd_signal']) and (last['macd'] > last['macd_signal'])
-                macd_down = (prev['macd'] > prev['macd_signal']) and (last['macd'] < last['macd_signal'])
                 vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.5)
+                
+                # --- RETEST LOGIC (Strong Signal) ---
+                prev_ema50 = prev['ema50']
+                # BUY: Price > EMA200 (Trend Up), Prev Candle touched EMA50 (Pullback), Current is Bullish (Bounce)
+                pullback_buy = abs(prev['low'] - prev_ema50) / prev_ema50 < 0.005 # Within 0.5% of EMA50
+                bounce_buy = (current_price > last['open']) and (current_price > prev['high'])
+                
+                # SELL: Price < EMA200 (Trend Down), Prev Candle touched EMA50 (Pullback), Current is Bearish (Rejection)
+                pullback_sell = abs(prev['high'] - prev_ema50) / prev_ema50 < 0.005
+                rejection_sell = (current_price < last['open']) and (current_price < prev['low'])
 
                 signal = None
                 if adx > 25 and vol_spike:
-                    if macd_up and current_price > ema200 and current_price > vwap and rsi > 50:
+                    if ema50 > ema200 and pullback_buy and bounce_buy and current_price > vwap and rsi > 50:
                         if check_order_book(c_sym): signal = "BUY"
-                    elif macd_down and current_price < ema200 and current_price < vwap and rsi < 50:
+                    elif ema50 < ema200 and pullback_sell and rejection_sell and current_price < vwap and rsi < 50:
                         if check_order_book(c_sym): signal = "SELL"
 
                 if signal:
@@ -477,11 +524,12 @@ def scan_market():
 
                     active_trades[sym] = {'type': signal, 'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'status': 'OPEN'}
                     last_signal_time[sym] = time.time() 
+                    save_active_trades() # Save to permanent memory
                     
                     clean_sym = sym.replace("B-", "").replace("I-", "").replace("_", "")
                     dcx_link = f"https://coindcx.com/trade/{clean_sym}"
                     
-                    text = (f"🎯 *cripto_adda {signal} SIGNAL*\n\n🪙 *Coin:* {clean_sym}\n"
+                    text = (f"🎯 *cripto_adda {signal} (RETEST)*\n\n🪙 *Coin:* {clean_sym}\n"
                             f"💰 *Entry:* {entry:.4f}\n🛑 *SL:* {sl:.4f}\n"
                             f"🎯 *TP1:* {tp1:.4f}\n🎯 *TP2:* {tp2:.4f}\n🎯 *TP3:* {tp3:.4f}\n"
                             f"📊 *ADX:* {adx:.1f} | *VWAP:* ✅ | *Whale:* ✅\n"
@@ -494,6 +542,7 @@ def scan_market():
     except: pass
 
 if __name__ == "__main__":
+    load_active_trades() # Load trades on start
     keep_alive()
     Thread(target=monitor_trades).start()
     Thread(target=telegram_commands).start()
