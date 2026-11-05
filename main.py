@@ -34,6 +34,9 @@ def send_telegram(text):
     except Exception as e:
         print("TG Error:", e)
 
+# API Block na ho isliye Headers
+headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+
 # ---------------- ACTIVE TRADES TRACKER ----------------
 active_trades = {}
 
@@ -44,7 +47,7 @@ def monitor_trades():
             continue
         
         try:
-            res = requests.get("https://api.coindcx.com/exchange/ticker", timeout=10)
+            res = requests.get("https://api.coindcx.com/exchange/ticker", headers=headers, timeout=10)
             tickers = res.json()
             price_map = {t['market']: float(t['last_price']) for t in tickers}
 
@@ -110,19 +113,24 @@ def telegram_commands():
                         
                         elif text == "/top":
                             try:
-                                t_res = requests.get("https://api.coindcx.com/exchange/ticker").json()
+                                t_res = requests.get("https://api.coindcx.com/exchange/ticker", headers=headers, timeout=10).json()
                                 valid_coins = []
                                 for c in t_res:
-                                    if 'market' in c and 'change24hour' in c and c['change24hour'] is not None:
+                                    # Robust extraction of change24hour
+                                    change_val = c.get('change24hour')
+                                    if change_val is not None and str(change_val).strip() != "":
                                         try:
-                                            change_val = float(c['change24hour'])
-                                            valid_coins.append({'market': c['market'], 'change': change_val})
+                                            val = float(change_val)
+                                            market = c.get('market', '')
+                                            # Show only USDT and INR pairs
+                                            if market.endswith('_USDT') or market.endswith('_INR'):
+                                                valid_coins.append({'market': market, 'change': val})
                                         except: pass
                                 
                                 top = sorted(valid_coins, key=lambda x: x['change'], reverse=True)[:5]
                                 
-                                if len(top) == 0:
-                                    send_telegram("⚠️ CoinDCX API is not sending data right now.")
+                                if not top:
+                                    send_telegram("⚠️ Data parsing error. CoinDCX might be updating. Try again.")
                                     continue
 
                                 t_text = "🏆 <b>Top 5 Gainers (24h)</b>\n\n"
@@ -135,7 +143,7 @@ def telegram_commands():
                                 requests.post(url, json=payload)
                                 
                             except Exception as e:
-                                send_telegram(f"❌ Error: {str(e)}")
+                                send_telegram(f"❌ Error: API Down or Slow")
 
                         elif text.startswith("/trend"):
                             parts = text.split()
@@ -143,7 +151,7 @@ def telegram_commands():
                                 target_sym = parts[1].upper()
                                 send_telegram(f"⏳ Checking trend for {target_sym}...")
                                 try:
-                                    res_c = requests.get(f"https://public.coindcx.com/market_data/candles?pair=B-{target_sym}_USDT&interval=1h&limit=200").json()
+                                    res_c = requests.get(f"https://public.coindcx.com/market_data/candles?pair=B-{target_sym}_USDT&interval=1h&limit=200", headers=headers).json()
                                     if isinstance(res_c, list) and len(res_c) > 50:
                                         res_c.reverse()
                                         closes = [float(c['close']) for c in res_c]
@@ -179,22 +187,23 @@ def calculate_indicators(df):
 def scan_market():
     print("Scanning CoinDCX (Ultimate Mode)...")
     try:
-        res = requests.get("https://api.coindcx.com/exchange/ticker", timeout=10)
+        res = requests.get("https://api.coindcx.com/exchange/ticker", headers=headers, timeout=10)
         data = res.json()
         
         all_coins = []
         for c in data:
-            if c['market'].endswith("_USDT") or c['market'].endswith("_INR"):
-                try:
-                    if float(c.get('volume', 0)) > 20000 and c['market'] not in active_trades:
-                        all_coins.append(c['market'])
-                except: pass
+            if 'market' in c:
+                if c['market'].endswith("_USDT") or c['market'].endswith("_INR"):
+                    try:
+                        if float(c.get('volume', 0)) > 20000 and c['market'] not in active_trades:
+                            all_coins.append(c['market'])
+                    except: pass
         
         print(f"Scanning {len(all_coins)} coins...")
 
         for sym in all_coins:
             try:
-                k_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={sym}&interval=15m&limit=200", timeout=10)
+                k_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={sym}&interval=15m&limit=200", headers=headers, timeout=10)
                 k_data = k_res.json()
                 if not isinstance(k_data, list) or len(k_data) < 200: continue
                 k_data.reverse() 
@@ -222,7 +231,7 @@ def scan_market():
                 signal = None
                 
                 if (macd_cross_up and vol_spike) or (macd_cross_down and vol_spike):
-                    h4_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={sym}&interval=4h&limit=100", timeout=10)
+                    h4_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={sym}&interval=4h&limit=100", headers=headers, timeout=10)
                     h4_data = h4_res.json()
                     if not isinstance(h4_data, list) or len(h4_data) < 50: continue
                     h4_data.reverse()
