@@ -4,7 +4,6 @@ import time
 import pandas as pd
 from flask import Flask
 from threading import Thread
-import json
 
 # ================= TOKEN RENDER SE AAYEGA =================
 TG_TOKEN = os.environ.get("TG_TOKEN")
@@ -26,7 +25,7 @@ def keep_alive():
 
 def send_telegram(text):
     if not TG_TOKEN: 
-        print("ERROR: Token not found in Render Environment!")
+        print("ERROR: Token not found!")
         return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     payload = {"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
@@ -112,33 +111,49 @@ def telegram_commands():
                         elif text == "/top":
                             try:
                                 t_res = requests.get("https://api.coindcx.com/exchange/ticker").json()
-                                valid_coins = [c for c in t_res if (c['market'].endswith('_USDT') or c['market'].endswith('_INR')) and 'change24hour' in c]
-                                top = sorted(valid_coins, key=lambda x: float(x.get('change24hour', 0)), reverse=True)[:5]
+                                valid_coins = []
+                                for c in t_res:
+                                    if 'market' in c and 'change24hour' in c and c['change24hour'] is not None:
+                                        try:
+                                            change_val = float(c['change24hour'])
+                                            valid_coins.append({'market': c['market'], 'change': change_val})
+                                        except: pass
                                 
-                                t_text = "🏆 *Top 5 Gainers (24h)*\n\n"
+                                top = sorted(valid_coins, key=lambda x: x['change'], reverse=True)[:5]
+                                
+                                if len(top) == 0:
+                                    send_telegram("⚠️ CoinDCX API is not sending data right now.")
+                                    continue
+
+                                t_text = "🏆 <b>Top 5 Gainers (24h)</b>\n\n"
                                 for idx, c in enumerate(top):
                                     sym = c['market'].replace("B-", "").replace("I-", "").replace("_", "")
-                                    change = float(c['change24hour'])
-                                    t_text += f"{idx+1}. *{sym}*: +{change:.2f}%\n"
+                                    t_text += f"{idx+1}. <b>{sym}</b>: +{c['change']:.2f}%\n"
                                 
-                                send_telegram(t_text)
+                                url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+                                payload = {"chat_id": TG_CHAT_ID, "text": t_text, "parse_mode": "HTML"}
+                                requests.post(url, json=payload)
+                                
                             except Exception as e:
-                                send_telegram(f"❌ Error: Could not fetch top movers.")
+                                send_telegram(f"❌ Error: {str(e)}")
 
                         elif text.startswith("/trend"):
                             parts = text.split()
                             if len(parts) > 1:
                                 target_sym = parts[1].upper()
                                 send_telegram(f"⏳ Checking trend for {target_sym}...")
-                                res_c = requests.get(f"https://public.coindcx.com/market_data/candles?pair=B-{target_sym}_USDT&interval=1h&limit=200").json()
-                                if isinstance(res_c, list) and len(res_c) > 50:
-                                    res_c.reverse()
-                                    closes = [float(c['close']) for c in res_c]
-                                    ema50 = pd.Series(closes).ewm(span=50, adjust=False).mean().iloc[-1]
-                                    trend = "BULLISH 🟢" if closes[-1] > ema50 else "BEARISH 🔴"
-                                    send_telegram(f"📊 *{target_sym} 1H Trend:*\n{trend}\nCurrent Price: {closes[-1]}")
-                                else:
-                                    send_telegram("❌ Could not fetch data. Check symbol format (e.g., /trend BTC).")
+                                try:
+                                    res_c = requests.get(f"https://public.coindcx.com/market_data/candles?pair=B-{target_sym}_USDT&interval=1h&limit=200").json()
+                                    if isinstance(res_c, list) and len(res_c) > 50:
+                                        res_c.reverse()
+                                        closes = [float(c['close']) for c in res_c]
+                                        ema50 = pd.Series(closes).ewm(span=50, adjust=False).mean().iloc[-1]
+                                        trend = "BULLISH 🟢" if closes[-1] > ema50 else "BEARISH 🔴"
+                                        send_telegram(f"📊 *{target_sym} 1H Trend:*\n{trend}\nCurrent Price: {closes[-1]}")
+                                    else:
+                                        send_telegram("❌ Could not fetch data. Check symbol format (e.g., /trend BTC).")
+                                except:
+                                    send_telegram("❌ Error fetching data.")
                             else:
                                 send_telegram("⚠️ Please use format: /trend BTC")
         except Exception as e:
