@@ -145,7 +145,6 @@ def telegram_commands():
                         chat_id = update.get("message", {}).get("chat", {}).get("id")
                     
                     if str(chat_id) == str(TG_CHAT_ID):
-                        # --- MENU BUTTONS ---
                         if text in ["/start", "/menu"]:
                             markup = {"inline_keyboard": [
                                 [{"text": "📊 Status", "callback_data": "/status"}, {"text": "🏆 Top Coins", "callback_data": "/top"}],
@@ -154,11 +153,9 @@ def telegram_commands():
                             ]}
                             send_telegram("👋 *Welcome to Pro Bot!*\nSelect an option or type `/search BTC`:", reply_markup=markup)
                         
-                        # --- STATUS COMMAND ---
                         elif text == "/status":
                             send_telegram(f"🤖 *Bot Running*\nActive Trades: {len(active_trades)}")
                         
-                        # --- ACTIVE TRADES COMMAND ---
                         elif text == "/trades":
                             if not active_trades: send_telegram("💤 *No active trades.*")
                             else:
@@ -167,7 +164,6 @@ def telegram_commands():
                                     t_text += f"🪙 *{s.replace('B-','').replace('I-','').replace('_','')}* ({t['type']})\nEntry: {t['entry']:.4f} | SL: {t['sl']:.4f}\n\n"
                                 send_telegram(t_text)
                         
-                        # --- REPORT COMMAND ---
                         elif text == "/report":
                             today = datetime.datetime.now().strftime("%Y-%m-%d")
                             today_t = [t for t in trade_history if t['date'] == today]
@@ -175,7 +171,6 @@ def telegram_commands():
                             l = sum(1 for t in today_t if t['result'] == 'LOSS')
                             send_telegram(f"📅 *Today:* Wins: {w} | Losses: {l}")
                         
-                        # --- TOP COMMAND ---
                         elif text == "/top":
                             send_telegram("⏳ Fetching top movers with prices...")
                             try:
@@ -187,37 +182,40 @@ def telegram_commands():
                                         if 'USDT' in m or 'INR' in m:
                                             ch = float(c.get('change24hour', 0))
                                             pr = float(c.get('last_price', 0))
-                                            valid.append({'m': m, 'c': ch, 'p': pr})
+                                            vol = float(c.get('volume', 0))
+                                            valid.append({'m': m, 'c': ch, 'p': pr, 'v': vol})
                                 
                                 top = sorted(valid, key=lambda x: x['c'], reverse=True)[:5]
                                 msg = "🏆 <b>Top 5 Gainers (24h)</b>\n\n"
                                 for i, c in enumerate(top): 
                                     clean_sym = c['m'].replace('B-','').replace('I-','').replace('_','')
-                                    msg += f"{i+1}. <b>{clean_sym}</b>\n📈 Change: +{c['c']:.2f}%\n💰 Price: {c['p']}\n\n"
+                                    msg += f"{i+1}. <b>{clean_sym}</b>\n📈 Change: +{c['c']:.2f}%\n💰 Price: {c['p']}\n📊 Volume: {c['v']:,.0f}\n\n"
                                 requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"})
                             except: send_telegram("❌ API Error while fetching top coins.")
 
-                        # --- SEARCH COMMAND (NEW FEATURE) ---
                         elif text.startswith("/search"):
                             parts = text.split()
                             if len(parts) > 1:
-                                target = parts[1].upper()
+                                raw_target = parts[1].upper()
+                                name_map = {"BITCOIN": "BTC", "ETHEREUM": "ETH", "SOLANA": "SOL", "RIPPLE": "XRP", "CARDANO": "ADA", "DOGECOIN": "DOGE", "POLKADOT": "DOT", "CHAINLINK": "LINK", "AVALANCHE": "AVAX", "SHIBA": "SHIB", "BABYDOGE": "BABYDOGE"}
+                                target = name_map.get(raw_target, raw_target)
+                                
                                 send_telegram(f"⏳ Searching details for *{target}*...")
                                 try:
                                     data = get_ticker_data()
                                     matched_coin = None
                                     
-                                    # 1. Search coin in 24h data
                                     for c in data:
                                         if not isinstance(c, dict): continue
                                         m = str(c.get('market'))
-                                        # Match B-BTC_USDT or B-BTCUSDT
-                                        if target in m and ('USDT' in m or 'INR' in m):
+                                        m_clean = m.replace("B-", "").replace("I-", "").replace("_USDT", "").replace("_INR", "").replace("USDT", "").replace("INR", "")
+                                        
+                                        if m_clean == target:
                                             matched_coin = c
-                                            if 'USDT' in m: break # Priority to USDT
+                                            if 'USDT' in m: break
                                     
                                     if not matched_coin:
-                                        send_telegram(f"❌ {target} not found on CoinDCX.")
+                                        send_telegram(f"❌ {raw_target} not found on CoinDCX.")
                                         continue
                                     
                                     m_sym = matched_coin['market']
@@ -225,7 +223,6 @@ def telegram_commands():
                                     change_24h = float(matched_coin.get('change24hour', 0))
                                     vol_24h = float(matched_coin.get('volume', 0))
                                     
-                                    # 2. Fetch 1H candles for Trend
                                     c_sym = m_sym
                                     if '_' not in c_sym and 'USDT' in c_sym: c_sym = 'B-' + c_sym.replace('USDT', '_USDT')
                                     elif '_' not in c_sym and 'INR' in c_sym: c_sym = 'I-' + c_sym.replace('INR', '_INR')
@@ -257,15 +254,19 @@ def telegram_commands():
         except: pass
         time.sleep(2)
 
+# ---------------- INDICATORS (UPDATED FOR ACCURATE SIGNALS) ----------------
 def calculate_indicators(df):
     df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     df['rsi'] = 100 - (100 / (1 + (gain / loss)))
+    
     df['ema12'] = df['close'].ewm(span=12, adjust=False).mean()
     df['ema26'] = df['close'].ewm(span=26, adjust=False).mean()
     df['macd'] = df['ema12'] - df['ema26']
+    df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean() # Standard MACD Signal Line
+    
     df['tr'] = pd.concat([df['high'] - df['low'], abs(df['high'] - df['close'].shift()), abs(df['low'] - df['close'].shift())], axis=1).max(axis=1)
     df['atr'] = df['tr'].rolling(window=14).mean()
     return df
@@ -291,19 +292,20 @@ def scan_market():
                 df = calculate_indicators(df)
                 
                 last, prev = df.iloc[-1], df.iloc[-2]
-                current_price, ema200, rsi, macd, prev_macd, atr = last['close'], last['ema200'], last['rsi'], last['macd'], prev['macd'], last['atr']
-                vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.2)
-                macd_up = (prev_macd < 0 and macd > 0) or (df.iloc[-3]['macd'] < 0 and prev_macd > 0)
-                macd_down = (prev_macd > 0 and macd < 0) or (df.iloc[-3]['macd'] > 0 and prev_macd < 0)
+                current_price, ema200, rsi, atr = last['close'], last['ema200'], last['rsi'], last['atr']
+                
+                # Standard MACD Cross
+                macd_up = (prev['macd'] < prev['macd_signal']) and (last['macd'] > last['macd_signal'])
+                macd_down = (prev['macd'] > prev['macd_signal']) and (last['macd'] < last['macd_signal'])
+                
+                # Volume condition (relaxed to 0.8x average)
+                vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 0.8)
 
                 signal = None
-                if (macd_up and vol_spike) or (macd_down and vol_spike):
-                    h4 = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval=4h&limit=100", headers=headers, timeout=5).json()
-                    if isinstance(h4, list) and len(h4) >= 50:
-                        h4.reverse()
-                        h4_ema50 = pd.Series([float(c['close']) for c in h4]).ewm(span=50, adjust=False).mean().iloc[-1]
-                        if macd_up and vol_spike and current_price > ema200 and 35 < rsi < 75 and float(h4[-1]['close']) > h4_ema50: signal = "BUY"
-                        elif macd_down and vol_spike and current_price < ema200 and 25 < rsi < 65 and float(h4[-1]['close']) < h4_ema50: signal = "SELL"
+                if macd_up and vol_spike and current_price > ema200 and rsi > 40:
+                    signal = "BUY"
+                elif macd_down and vol_spike and current_price < ema200 and rsi < 60:
+                    signal = "SELL"
 
                 if signal:
                     entry, risk = current_price, atr * 1.5 
