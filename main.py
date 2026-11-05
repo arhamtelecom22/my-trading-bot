@@ -106,15 +106,22 @@ def telegram_commands():
                     if str(chat_id) == str(TG_CHAT_ID):
                         if text == "/status":
                             send_telegram(f"🤖 *Bot Status: RUNNING*\nActive Trades: {len(active_trades)}")
-                        elif text == "/top":
-                            send_telegram("⏳ Fetching top movers...")
-                            t_res = requests.get("https://api.coindcx.com/exchange/ticker").json()
-                            top = sorted([c for c in t_res if c['market'].endswith('_USDT')], key=lambda x: float(x['change24hour']), reverse=True)[:5]
-                            t_text = "🏆 *Top 5 Gainers (24h)*\n\n"
-                            for idx, c in enumerate(top):
-                                sym = c['market'].replace("B-", "").replace("_", "")
-                                t_text += f"{idx+1}. {sym}: +{c['change24hour']}%\n"
-                            send_telegram(t_text)
+                                                elif text == "/top":
+                            try:
+                                t_res = requests.get("https://api.coindcx.com/exchange/ticker").json()
+                                # Sirf valid data wale coins filter karo
+                                valid_coins = [c for c in t_res if (c['market'].endswith('_USDT') or c['market'].endswith('_INR')) and 'change24hour' in c]
+                                top = sorted(valid_coins, key=lambda x: float(x.get('change24hour', 0)), reverse=True)[:5]
+                                
+                                t_text = "🏆 *Top 5 Gainers (24h)*\n\n"
+                                for idx, c in enumerate(top):
+                                    sym = c['market'].replace("B-", "").replace("I-", "").replace("_", "")
+                                    change = float(c['change24hour'])
+                                    t_text += f"{idx+1}. *{sym}*: +{change:.2f}%\n"
+                                
+                                send_telegram(t_text)
+                            except Exception as e:
+                                send_telegram(f"❌ Error: {e}")
                         elif text.startswith("/trend"):
                             parts = text.split()
                             if len(parts) > 1:
