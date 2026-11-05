@@ -145,13 +145,20 @@ def telegram_commands():
                         chat_id = update.get("message", {}).get("chat", {}).get("id")
                     
                     if str(chat_id) == str(TG_CHAT_ID):
+                        # --- MENU BUTTONS ---
                         if text in ["/start", "/menu"]:
-                            markup = {"inline_keyboard": [[{"text": "📊 Status", "callback_data": "/status"}, {"text": "🏆 Top Coins", "callback_data": "/top"}], [{"text": "📈 Active Trades", "callback_data": "/trades"}, {"text": "📅 Report", "callback_data": "/report"}]]}
-                            send_telegram("👋 *Welcome!*\nSelect an option:", reply_markup=markup)
+                            markup = {"inline_keyboard": [
+                                [{"text": "📊 Status", "callback_data": "/status"}, {"text": "🏆 Top Coins", "callback_data": "/top"}],
+                                [{"text": "🔍 Search Coin", "callback_data": "/search BTC"}, {"text": "📈 Active Trades", "callback_data": "/trades"}],
+                                [{"text": "📅 Report", "callback_data": "/report"}]
+                            ]}
+                            send_telegram("👋 *Welcome to Pro Bot!*\nSelect an option or type `/search BTC`:", reply_markup=markup)
                         
+                        # --- STATUS COMMAND ---
                         elif text == "/status":
                             send_telegram(f"🤖 *Bot Running*\nActive Trades: {len(active_trades)}")
                         
+                        # --- ACTIVE TRADES COMMAND ---
                         elif text == "/trades":
                             if not active_trades: send_telegram("💤 *No active trades.*")
                             else:
@@ -160,6 +167,7 @@ def telegram_commands():
                                     t_text += f"🪙 *{s.replace('B-','').replace('I-','').replace('_','')}* ({t['type']})\nEntry: {t['entry']:.4f} | SL: {t['sl']:.4f}\n\n"
                                 send_telegram(t_text)
                         
+                        # --- REPORT COMMAND ---
                         elif text == "/report":
                             today = datetime.datetime.now().strftime("%Y-%m-%d")
                             today_t = [t for t in trade_history if t['date'] == today]
@@ -167,6 +175,7 @@ def telegram_commands():
                             l = sum(1 for t in today_t if t['result'] == 'LOSS')
                             send_telegram(f"📅 *Today:* Wins: {w} | Losses: {l}")
                         
+                        # --- TOP COMMAND ---
                         elif text == "/top":
                             send_telegram("⏳ Fetching top movers with prices...")
                             try:
@@ -182,15 +191,69 @@ def telegram_commands():
                                 
                                 top = sorted(valid, key=lambda x: x['c'], reverse=True)[:5]
                                 msg = "🏆 <b>Top 5 Gainers (24h)</b>\n\n"
-                                
                                 for i, c in enumerate(top): 
                                     clean_sym = c['m'].replace('B-','').replace('I-','').replace('_','')
-                                    msg += f"{i+1}. <b>{clean_sym}</b>\n"
-                                    msg += f"📈 Change: +{c['c']:.2f}%\n"
-                                    msg += f"💰 Price: {c['p']}\n\n"
-                                    
+                                    msg += f"{i+1}. <b>{clean_sym}</b>\n📈 Change: +{c['c']:.2f}%\n💰 Price: {c['p']}\n\n"
                                 requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"})
                             except: send_telegram("❌ API Error while fetching top coins.")
+
+                        # --- SEARCH COMMAND (NEW FEATURE) ---
+                        elif text.startswith("/search"):
+                            parts = text.split()
+                            if len(parts) > 1:
+                                target = parts[1].upper()
+                                send_telegram(f"⏳ Searching details for *{target}*...")
+                                try:
+                                    data = get_ticker_data()
+                                    matched_coin = None
+                                    
+                                    # 1. Search coin in 24h data
+                                    for c in data:
+                                        if not isinstance(c, dict): continue
+                                        m = str(c.get('market'))
+                                        # Match B-BTC_USDT or B-BTCUSDT
+                                        if target in m and ('USDT' in m or 'INR' in m):
+                                            matched_coin = c
+                                            if 'USDT' in m: break # Priority to USDT
+                                    
+                                    if not matched_coin:
+                                        send_telegram(f"❌ {target} not found on CoinDCX.")
+                                        continue
+                                    
+                                    m_sym = matched_coin['market']
+                                    price = float(matched_coin.get('last_price', 0))
+                                    change_24h = float(matched_coin.get('change24hour', 0))
+                                    vol_24h = float(matched_coin.get('volume', 0))
+                                    
+                                    # 2. Fetch 1H candles for Trend
+                                    c_sym = m_sym
+                                    if '_' not in c_sym and 'USDT' in c_sym: c_sym = 'B-' + c_sym.replace('USDT', '_USDT')
+                                    elif '_' not in c_sym and 'INR' in c_sym: c_sym = 'I-' + c_sym.replace('INR', '_INR')
+                                    
+                                    h1_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval=1h&limit=100", headers=headers, timeout=5).json()
+                                    
+                                    trend = "NEUTRAL 🟡"
+                                    if isinstance(h1_res, list) and len(h1_res) >= 50:
+                                        h1_res.reverse()
+                                        closes = [float(c['close']) for c in h1_res]
+                                        ema50 = pd.Series(closes).ewm(span=50, adjust=False).mean().iloc[-1]
+                                        if price > ema50: trend = "BULLISH 🟢"
+                                        else: trend = "BEARISH 🔴"
+
+                                    clean_sym = m_sym.replace("B-", "").replace("I-", "").replace("_", "")
+                                    
+                                    msg = (f"🔍 <b>{clean_sym} Details</b>\n\n"
+                                           f"💰 <b>Current Price:</b> {price}\n"
+                                           f"📈 <b>24h Change:</b> {change_24h:.2f}%\n"
+                                           f"📊 <b>24h Volume:</b> {vol_24h:,.0f}\n"
+                                           f"🚀 <b>1H Trend:</b> {trend}\n"
+                                           f"🔗 <a href='https://coindcx.com/trade/{clean_sym}'>Open Chart</a>")
+                                    
+                                    requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True})
+                                except Exception as e:
+                                    send_telegram(f"❌ Error: {str(e)[:50]}")
+                            else:
+                                send_telegram("⚠️ Please use format: `/search BTC`")
         except: pass
         time.sleep(2)
 
