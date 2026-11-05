@@ -25,7 +25,7 @@ def home():
     html = """
     <html>
     <head>
-        <title>CoinDCX Ultimate Bot V11</title>
+        <title>cripto_adda Dashboard</title>
         <meta http-equiv="refresh" content="30">
         <style>
             body { background-color: #12161e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; padding: 20px; }
@@ -41,7 +41,7 @@ def home():
     </head>
     <body>
         <div class="container">
-            <h1>🤖 CoinDCX Ultimate Bot V11</h1>
+            <h1>🤖 cripto_adda Bot</h1>
             <p>Status: <span class="status">● Running 24/7</span> | Scan TF: """ + SCAN_TIMEFRAME + """ | Watchlist: """ + (", ".join(watchlist) if watchlist else "All Coins") + """</p>
             <h2>📈 Active Trades</h2>
     """
@@ -112,7 +112,7 @@ def get_journal():
     except: pass
     return []
 
-# ---------------- ORDER BOOK CHECK (WHALE) ----------------
+# ---------------- ORDER BOOK CHECK ----------------
 def check_order_book(sym):
     try:
         res = requests.get(f"https://api.coindcx.com/exchange/v1/orders/orderbook?pair={sym}", timeout=5).json()
@@ -132,7 +132,6 @@ def monitor_trades():
                 continue
             price_map = {t['market']: float(t['last_price']) for t in tickers if isinstance(t, dict)}
             
-            # Check Alerts
             for sym, alert_data in list(price_alerts.items()):
                 if sym in price_map:
                     curr_price = price_map[sym]
@@ -143,7 +142,6 @@ def monitor_trades():
                         send_telegram(f"🚨 *PRICE ALERT!*\n\n🪙 *Coin:* {clean}\n💰 *Target:* {target}\n📈 *Current:* {curr_price}")
                         del price_alerts[sym]
             
-            # Check Active Trades
             for sym, trade in list(active_trades.items()):
                 if sym not in price_map: continue
                 curr_price = price_map[sym]
@@ -227,7 +225,7 @@ def run_backtest(coin, tf):
             vol_spike = row['volume'] > (df['volume'].iloc[i-20:i].mean() * 1.5)
             
             if row['adx'] > 25 and vol_spike:
-                signal = "BUY" if (macd_up and row['close'] > row['ema200']) else ("SELL" if (macd_down and row['close'] < row['ema200']) else None)
+                signal = "BUY" if (macd_up and row['close'] > row['ema200'] and row['close'] > row['vwap']) else ("SELL" if (macd_down and row['close'] < row['ema200'] and row['close'] < row['vwap']) else None)
                 if signal:
                     entry, risk = row['close'], row['atr'] * 2.5
                     outcome = "OPEN"
@@ -266,10 +264,10 @@ def telegram_commands():
                                 [{"text": "📊 Status", "callback_data": "/status"}, {"text": "🏆 Top Coins", "callback_data": "/top"}],
                                 [{"text": "📉 Losers", "callback_data": "/bottom"}, {"text": "📓 Journal", "callback_data": "/journal"}]
                             ]}
-                            send_telegram(f"👋 *Welcome V11!*\nTF: *{SCAN_TIMEFRAME}* | Watch: *{len(watchlist)}*", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome to cripto_adda!*\nTF: *{SCAN_TIMEFRAME}* | Watch: *{len(watchlist)}*", reply_markup=markup)
                         
                         elif text == "/status":
-                            send_telegram(f"🤖 *Running*\nTF: {SCAN_TIMEFRAME}\nTrades: {len(active_trades)}\nAlerts: {len(price_alerts)}")
+                            send_telegram(f"🤖 *cripto_adda Running*\nTF: {SCAN_TIMEFRAME}\nTrades: {len(active_trades)}\nAlerts: {len(price_alerts)}")
                         
                         elif text == "/journal":
                             j = get_journal()
@@ -290,7 +288,78 @@ def telegram_commands():
                                 for i, c in enumerate(sorted_coins): msg += f"{i+1}. <b>{c['m'].replace('B-','').replace('_','')}</b>: {c['c']:.2f}% | {c['p']}\n"
                                 requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"})
                             except: send_telegram("❌ API Error.")
-                        
+
+                        elif text.startswith("/search"):
+                            parts = text.split()
+                            if len(parts) > 1:
+                                raw_target = parts[1].upper()
+                                name_map = {"BITCOIN": "BTC", "ETHEREUM": "ETH", "SOLANA": "SOL", "RIPPLE": "XRP", "CARDANO": "ADA", "DOGECOIN": "DOGE"}
+                                target = name_map.get(raw_target, raw_target)
+                                send_telegram(f"⏳ Searching *{target}*...")
+                                try:
+                                    data = get_ticker_data()
+                                    matched_coin = None
+                                    for c in data:
+                                        if isinstance(c, dict):
+                                            m = str(c.get('market'))
+                                            m_clean = m.replace("B-", "").replace("I-", "").replace("_USDT", "").replace("_INR", "").replace("USDT", "").replace("INR", "")
+                                            if m_clean == target:
+                                                matched_coin = c
+                                                if 'USDT' in m: break
+                                    
+                                    if not matched_coin:
+                                        send_telegram(f"❌ {raw_target} not found.")
+                                        continue
+                                    
+                                    m_sym = matched_coin['market']
+                                    price = float(matched_coin.get('last_price', 0))
+                                    change_24h = float(matched_coin.get('change24hour', 0))
+                                    vol_24h = float(matched_coin.get('volume', 0))
+                                    
+                                    c_sym = m_sym
+                                    if '_' not in c_sym and 'USDT' in c_sym: c_sym = 'B-' + c_sym.replace('USDT', '_USDT')
+                                    elif '_' not in c_sym and 'INR' in c_sym: c_sym = 'I-' + c_sym.replace('INR', '_INR')
+                                    
+                                    h1_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval=1h&limit=100", headers=headers, timeout=5).json()
+                                    trend = "NEUTRAL 🟡"
+                                    if isinstance(h1_res, list) and len(h1_res) >= 50:
+                                        h1_res.reverse()
+                                        closes = [float(c['close']) for c in h1_res]
+                                        ema50 = pd.Series(closes).ewm(span=50, adjust=False).mean().iloc[-1]
+                                        trend = "BULLISH 🟢" if price > ema50 else "BEARISH 🔴"
+
+                                    clean_sym = m_sym.replace("B-", "").replace("I-", "").replace("_", "")
+                                    msg = (f"🔍 <b>{clean_sym} Details</b>\n\n"
+                                           f"💰 <b>Price:</b> {price}\n"
+                                           f"📈 <b>24h Change:</b> {change_24h:.2f}%\n"
+                                           f"📊 <b>24h Volume:</b> {vol_24h:,.0f}\n"
+                                           f"🚀 <b>1H Trend:</b> {trend}\n"
+                                           f"🔗 <a href='https://coindcx.com/trade/{clean_sym}'>Open Chart</a>")
+                                    requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True})
+                                except: send_telegram(f"❌ Error")
+                            else: send_telegram("⚠️ Format: `/search BTC`")
+
+                        elif text.startswith("/zones"):
+                            parts = text.split()
+                            if len(parts) > 1:
+                                target = parts[1].upper()
+                                send_telegram(f"⏳ Calculating Zones for *{target}*...")
+                                try:
+                                    c_sym = f"B-{target}_USDT"
+                                    res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval=15m&limit=100", headers=headers, timeout=5).json()
+                                    if isinstance(res, list) and len(res) >= 50:
+                                        res.reverse()
+                                        highs = [float(c['high']) for c in res]
+                                        lows = [float(c['low']) for c in res]
+                                        current = float(res[-1]['close'])
+                                        support = min(lows[-20:])
+                                        resistance = max(highs[-20:])
+                                        msg = (f"📉 *Zones ({target})*\n\n💰 Current: {current:.4f}\n🟢 *Support:* {support:.4f}\n🔴 *Resistance:* {resistance:.4f}")
+                                        send_telegram(msg)
+                                    else: send_telegram("❌ Data not found.")
+                                except: send_telegram("❌ Error.")
+                            else: send_telegram("⚠️ Use: `/zones BTC`")
+
                         elif text.startswith("/alert"):
                             parts = text.split()
                             if len(parts) == 3:
@@ -305,8 +374,11 @@ def telegram_commands():
 
                         elif text.startswith("/backtest"):
                             parts = text.split()
-                            if len(parts) >= 3: Thread(target=run_backtest, args=(parts[1].upper(), parts[2])).start()
-                            else: send_telegram("⚠️ Use: `/backtest BTC 15m`")
+                            if len(parts) >= 2:
+                                target_coin = parts[1].upper()
+                                tf = parts[2] if len(parts) >= 3 else "15m"
+                                Thread(target=run_backtest, args=(target_coin, tf)).start()
+                            else: send_telegram("⚠️ Use: `/backtest BTC` or `/backtest BTC 1h`")
 
                         elif text.startswith("/scan"):
                             parts = text.split()
@@ -325,23 +397,6 @@ def telegram_commands():
                         elif text.startswith("/clearwatch"):
                             watchlist.clear()
                             send_telegram("✅ Watchlist cleared. Scanning all coins.")
-
-                        elif text.startswith("/analysis"):
-                            parts = text.split()
-                            if len(parts) > 1:
-                                target = parts[1].upper()
-                                send_telegram(f"⏳ Analyzing {target}...")
-                                try:
-                                    msg = f"🔬 <b>Analysis: {target}</b>\n\n"
-                                    for tf in ['15m', '1h', '4h']:
-                                        res = requests.get(f"https://public.coindcx.com/market_data/candles?pair=B-{target}_USDT&interval={tf}&limit=200", headers=headers).json()
-                                        if isinstance(res, list) and len(res) >= 50:
-                                            res.reverse()
-                                            closes = [float(c['close']) for c in res]
-                                            ema50 = pd.Series(closes).ewm(span=50, adjust=False).mean().iloc[-1]
-                                            msg += f"⏱️ <b>{tf}:</b> {'🟢 BULLISH' if closes[-1] > ema50 else '🔴 BEARISH'}\n"
-                                    requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"})
-                                except: send_telegram("❌ Error.")
         except: pass
         time.sleep(2)
 
@@ -426,7 +481,7 @@ def scan_market():
                     clean_sym = sym.replace("B-", "").replace("I-", "").replace("_", "")
                     dcx_link = f"https://coindcx.com/trade/{clean_sym}"
                     
-                    text = (f"🎯 *V11 {signal} SIGNAL*\n\n🪙 *Coin:* {clean_sym}\n"
+                    text = (f"🎯 *cripto_adda {signal} SIGNAL*\n\n🪙 *Coin:* {clean_sym}\n"
                             f"💰 *Entry:* {entry:.4f}\n🛑 *SL:* {sl:.4f}\n"
                             f"🎯 *TP1:* {tp1:.4f}\n🎯 *TP2:* {tp2:.4f}\n🎯 *TP3:* {tp3:.4f}\n"
                             f"📊 *ADX:* {adx:.1f} | *VWAP:* ✅ | *Whale:* ✅\n"
