@@ -2,10 +2,6 @@ import os
 import requests
 import time
 import pandas as pd
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import io
 from flask import Flask
 from threading import Thread
 import datetime
@@ -19,7 +15,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "CoinDCX Ultimate Bot is Running!"
+    return "CoinDCX Bot is Running!"
 
 def run():
     app.run(host='0.0.0.0', port=8080)
@@ -36,15 +32,6 @@ def send_telegram(text, reply_markup=None):
         payload["reply_markup"] = reply_markup
     try:
         requests.post(url, json=payload)
-    except: pass
-
-def send_telegram_photo(image_bytes, caption):
-    if not TG_TOKEN: return
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
-    files = {'photo': ('chart.png', image_bytes, 'image/png')}
-    data = {"chat_id": TG_CHAT_ID, "caption": caption, "parse_mode": "Markdown"}
-    try:
-        requests.post(url, files=files, data=data)
     except: pass
 
 headers = {'User-Agent': 'Mozilla/5.0'}
@@ -141,28 +128,6 @@ def daily_report_loop():
                 send_telegram(f"📅 *Daily Report ({today})*\n\n🟢 Wins: {wins}\n🔴 Losses: {losses}\n📊 *Win Rate:* {win_rate:.1f}%")
         time.sleep(60)
 
-# ---------------- CHART GENERATOR (LIGHTWEIGHT) ----------------
-def generate_chart_image(df, entry, sl, tp1, tp2, tp3, clean_sym, signal):
-    try:
-        df_plot = df.tail(50).copy()
-        plt.figure(figsize=(10, 6))
-        plt.plot(df_plot['close'], color='blue', label='Price')
-        plt.axhline(y=entry, color='blue', linestyle='--', label=f'Entry: {entry:.4f}')
-        plt.axhline(y=sl, color='red', linestyle='--', label=f'SL: {sl:.4f}')
-        plt.axhline(y=tp1, color='green', linestyle='--', label=f'TP1: {tp1:.4f}')
-        plt.axhline(y=tp2, color='green', linestyle='--', label=f'TP2: {tp2:.4f}')
-        plt.axhline(y=tp3, color='green', linestyle='--', label=f'TP3: {tp3:.4f}')
-        plt.title(f"{clean_sym} - {signal}")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight')
-        buf.seek(0)
-        plt.close()
-        return buf
-    except: return None
-
 def telegram_commands():
     offset = 0
     while True:
@@ -183,8 +148,10 @@ def telegram_commands():
                         if text in ["/start", "/menu"]:
                             markup = {"inline_keyboard": [[{"text": "📊 Status", "callback_data": "/status"}, {"text": "🏆 Top Coins", "callback_data": "/top"}], [{"text": "📈 Active Trades", "callback_data": "/trades"}, {"text": "📅 Report", "callback_data": "/report"}]]}
                             send_telegram("👋 *Welcome!*\nSelect an option:", reply_markup=markup)
+                        
                         elif text == "/status":
                             send_telegram(f"🤖 *Bot Running*\nActive Trades: {len(active_trades)}")
+                        
                         elif text == "/trades":
                             if not active_trades: send_telegram("💤 *No active trades.*")
                             else:
@@ -192,22 +159,38 @@ def telegram_commands():
                                 for s, t in active_trades.items():
                                     t_text += f"🪙 *{s.replace('B-','').replace('I-','').replace('_','')}* ({t['type']})\nEntry: {t['entry']:.4f} | SL: {t['sl']:.4f}\n\n"
                                 send_telegram(t_text)
+                        
                         elif text == "/report":
                             today = datetime.datetime.now().strftime("%Y-%m-%d")
                             today_t = [t for t in trade_history if t['date'] == today]
                             w = sum(1 for t in today_t if t['result'] == 'WIN')
                             l = sum(1 for t in today_t if t['result'] == 'LOSS')
                             send_telegram(f"📅 *Today:* Wins: {w} | Losses: {l}")
+                        
                         elif text == "/top":
-                            send_telegram("⏳ Fetching...")
+                            send_telegram("⏳ Fetching top movers with prices...")
                             try:
                                 data = get_ticker_data()
-                                valid = [{'m': str(c.get('market')), 'c': float(c.get('change24hour', 0))} for c in data if isinstance(c, dict) and ('USDT' in str(c.get('market')) or 'INR' in str(c.get('market')))]
+                                valid = []
+                                for c in data:
+                                    if isinstance(c, dict):
+                                        m = str(c.get('market'))
+                                        if 'USDT' in m or 'INR' in m:
+                                            ch = float(c.get('change24hour', 0))
+                                            pr = float(c.get('last_price', 0))
+                                            valid.append({'m': m, 'c': ch, 'p': pr})
+                                
                                 top = sorted(valid, key=lambda x: x['c'], reverse=True)[:5]
-                                msg = "🏆 <b>Top 5 Gainers</b>\n\n"
-                                for i, c in enumerate(top): msg += f"{i+1}. <b>{c['m'].replace('B-','').replace('I-','').replace('_','')}</b>: {c['c']:.2f}%\n"
+                                msg = "🏆 <b>Top 5 Gainers (24h)</b>\n\n"
+                                
+                                for i, c in enumerate(top): 
+                                    clean_sym = c['m'].replace('B-','').replace('I-','').replace('_','')
+                                    msg += f"{i+1}. <b>{clean_sym}</b>\n"
+                                    msg += f"📈 Change: +{c['c']:.2f}%\n"
+                                    msg += f"💰 Price: {c['p']}\n\n"
+                                    
                                 requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"})
-                            except: send_telegram("❌ API Error")
+                            except: send_telegram("❌ API Error while fetching top coins.")
         except: pass
         time.sleep(2)
 
@@ -267,14 +250,12 @@ def scan_market():
                     active_trades[sym] = {'type': signal, 'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'status': 'OPEN'}
                     clean_sym = sym.replace("B-", "").replace("I-", "").replace("_", "")
                     
-                    text = (f"🎯 *SNIPER {signal}*\n\n🪙 *Coin:* [{clean_sym}](https://coindcx.com/trade/{clean_sym})\n"
+                    text = (f"🎯 *SNIPER {signal} SIGNAL*\n\n🪙 *Coin:* [{clean_sym}](https://coindcx.com/trade/{clean_sym})\n"
                             f"💰 *Entry:* {entry:.4f}\n🛑 *SL:* {sl:.4f}\n"
                             f"🎯 *TP1:* {tp1:.4f}\n🎯 *TP2:* {tp2:.4f}\n🎯 *TP3:* {tp3:.4f}\n"
                             f"⏱️ *TF:* 15m\n\n💡 _Trailing SL Active._")
                     
                     send_telegram(text)
-                    chart = generate_chart_image(df, entry, sl, tp1, tp2, tp3, clean_sym, signal)
-                    if chart: send_telegram_photo(chart, f"{clean_sym} Chart")
             except: pass
             time.sleep(0.5)
     except: pass
