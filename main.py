@@ -5,6 +5,7 @@ import pandas as pd
 from flask import Flask
 from threading import Thread
 import datetime
+import json
 
 # ================= TOKEN RENDER SE AAYEGA =================
 TG_TOKEN = os.environ.get("TG_TOKEN")
@@ -15,7 +16,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "CoinDCX Ultimate Sniper Bot is Running!"
+    return "CoinDCX Ultimate V7 Bot is Running!"
 
 def run():
     app.run(host='0.0.0.0', port=8080)
@@ -41,6 +42,27 @@ last_ticker_time = 0
 active_trades = {}
 price_alerts = {} 
 last_signal_time = {} 
+SCAN_TIMEFRAME = "15m" # Default
+
+# ---------------- TRADE JOURNAL (JSON) ----------------
+def save_to_journal(trade_data):
+    try:
+        journal = []
+        if os.path.exists("journal.json"):
+            with open("journal.json", "r") as f:
+                journal = json.load(f)
+        journal.append(trade_data)
+        with open("journal.json", "w") as f:
+            json.dump(journal, f)
+    except: pass
+
+def get_journal():
+    try:
+        if os.path.exists("journal.json"):
+            with open("journal.json", "r") as f:
+                return json.load(f)
+    except: pass
+    return []
 
 def get_ticker_data():
     global last_ticker_data, last_ticker_time
@@ -66,63 +88,129 @@ def monitor_trades():
                 
             price_map = {t['market']: float(t['last_price']) for t in tickers if isinstance(t, dict)}
             
-            # 1. CHECK PRICE ALERTS
             for sym, alert_data in list(price_alerts.items()):
                 if sym in price_map:
                     curr_price = price_map[sym]
                     target = alert_data['price']
                     alert_type = alert_data['type']
-                    
                     if (alert_type == 'above' and curr_price >= target) or (alert_type == 'below' and curr_price <= target):
                         clean = sym.replace("B-", "").replace("I-", "").replace("_", "")
-                        send_telegram(f"🚨 *PRICE ALERT TRIGGERED!*\n\n🪙 *Coin:* {clean}\n💰 *Target:* {target}\n📈 *Current Price:* {curr_price}\n\n_Alert has been removed._")
+                        send_telegram(f"🚨 *PRICE ALERT!*\n\n🪙 *Coin:* {clean}\n💰 *Target:* {target}\n📈 *Current:* {curr_price}\n\n_Alert removed._")
                         del price_alerts[sym]
 
-            # 2. MONITOR ACTIVE TRADES
             for sym, trade in list(active_trades.items()):
                 if sym not in price_map: continue
                 curr_price = price_map[sym]
                 signal, entry = trade['type'], trade['entry']
                 sl, tp1, tp2, tp3 = trade['sl'], trade['tp1'], trade['tp2'], trade['tp3']
                 clean_sym = sym.replace("B-", "").replace("I-", "").replace("_", "")
+                res_text = None
 
                 if signal == "BUY":
                     if curr_price <= sl:
-                        send_telegram(f"❌ *{clean_sym} Hit STOP LOSS*\nPrice: {curr_price:.4f}")
+                        res_text = f"❌ *{clean_sym} Hit STOP LOSS*\nPrice: {curr_price:.4f}"
+                        save_to_journal({'date': str(datetime.datetime.now()), 'coin': clean_sym, 'type': 'BUY', 'result': 'LOSS'})
                         del active_trades[sym]
-                    elif curr_price >= tp1 and trade['status'] == "OPEN":
-                        trade['sl'] = entry 
-                        send_telegram(f"✅ *{clean_sym} Hit TP1*\nSL moved to Entry (Risk-Free).")
-                        trade['status'] = "TP1_HIT"
+                    elif curr_price >= tp3:
+                        res_text = f"🚀 *{clean_sym} Hit TP3!*\nTrade Complete."
+                        save_to_journal({'date': str(datetime.datetime.now()), 'coin': clean_sym, 'type': 'BUY', 'result': 'WIN'})
+                        del active_trades[sym]
                     elif curr_price >= tp2 and trade['status'] == "TP1_HIT":
                         trade['sl'] = tp1 
-                        send_telegram(f"🔥 *{clean_sym} Hit TP2*\nSL moved to TP1.")
+                        res_text = f"🔥 *{clean_sym} Hit TP2*\nSL moved to TP1."
                         trade['status'] = "TP2_HIT"
-                    elif curr_price >= tp3:
-                        send_telegram(f"🚀 *{clean_sym} Hit TP3!*\nTrade Complete.")
-                        del active_trades[sym]
+                    elif curr_price >= tp1 and trade['status'] == "OPEN":
+                        trade['sl'] = entry 
+                        res_text = f"✅ *{clean_sym} Hit TP1*\nSL moved to Entry (Risk-Free)."
+                        trade['status'] = "TP1_HIT"
 
                 elif signal == "SELL":
                     if curr_price >= sl:
-                        send_telegram(f"❌ *{clean_sym} Hit STOP LOSS*\nPrice: {curr_price:.4f}")
+                        res_text = f"❌ *{clean_sym} Hit STOP LOSS*\nPrice: {curr_price:.4f}"
+                        save_to_journal({'date': str(datetime.datetime.now()), 'coin': clean_sym, 'type': 'SELL', 'result': 'LOSS'})
                         del active_trades[sym]
-                    elif curr_price <= tp1 and trade['status'] == "OPEN":
-                        trade['sl'] = entry 
-                        send_telegram(f"✅ *{clean_sym} Hit TP1*\nSL moved to Entry (Risk-Free).")
-                        trade['status'] = "TP1_HIT"
+                    elif curr_price <= tp3:
+                        res_text = f"🚀 *{clean_sym} Hit TP3!*\nTrade Complete."
+                        save_to_journal({'date': str(datetime.datetime.now()), 'coin': clean_sym, 'type': 'SELL', 'result': 'WIN'})
+                        del active_trades[sym]
                     elif curr_price <= tp2 and trade['status'] == "TP1_HIT":
                         trade['sl'] = tp1 
-                        send_telegram(f"🔥 *{clean_sym} Hit TP2*\nSL moved to TP1.")
+                        res_text = f"🔥 *{clean_sym} Hit TP2*\nSL moved to TP1."
                         trade['status'] = "TP2_HIT"
-                    elif curr_price <= tp3:
-                        send_telegram(f"🚀 *{clean_sym} Hit TP3!*\nTrade Complete.")
-                        del active_trades[sym]
-        except Exception as e: 
-            print("Monitor Error:", e)
+                    elif curr_price <= tp1 and trade['status'] == "OPEN":
+                        trade['sl'] = entry 
+                        res_text = f"✅ *{clean_sym} Hit TP1*\nSL moved to Entry (Risk-Free)."
+                        trade['status'] = "TP1_HIT"
+                
+                if res_text:
+                    send_telegram(res_text)
+        except: pass
         time.sleep(15)
+
+# ---------------- BACKTESTING ENGINE ----------------
+def run_backtest(coin, tf):
+    send_telegram(f"⏳ Running Backtest for *{coin}* on {tf}... (Please wait)")
+    try:
+        c_sym = f"B-{coin}_USDT"
+        res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval={tf}&limit=500", headers=headers, timeout=10).json()
+        if not isinstance(res, list) or len(res) < 200:
+            send_telegram("❌ Not enough data for backtest.")
+            return
+        
+        res.reverse()
+        df = pd.DataFrame(res)
+        for col in ['close', 'high', 'low', 'volume', 'open']: df[col] = df[col].astype(float)
+        df = calculate_indicators(df)
+        
+        wins, losses = 0, 0
+        
+        # Simple loop backtest
+        for i in range(200, len(df)-10):
+            row = df.iloc[i]
+            prev = df.iloc[i-1]
+            
+            macd_up = (prev['macd'] < prev['macd_signal']) and (row['macd'] > row['macd_signal'])
+            macd_down = (prev['macd'] > prev['macd_signal']) and (row['macd'] < row['macd_signal'])
+            vol_spike = row['volume'] > (df['volume'].iloc[i-20:i].mean() * 1.5)
+            
+            signal = None
+            if row['adx'] > 25 and vol_spike:
+                if macd_up and row['close'] > row['ema200'] and row['close'] > row['vwap']:
+                    signal = "BUY"
+                elif macd_down and row['close'] < row['ema200'] and row['close'] < row['vwap']:
+                    signal = "SELL"
+            
+            if signal:
+                entry = row['close']
+                risk = row['atr'] * 2.5
+                # Check future 10 candles for SL or TP1
+                outcome = "OPEN"
+                for j in range(i+1, min(i+11, len(df))):
+                    future_high = df.iloc[j]['high']
+                    future_low = df.iloc[j]['low']
+                    
+                    if signal == "BUY":
+                        if future_low <= entry - risk: outcome = "LOSS"; break
+                        if future_high >= entry + (risk * 1.5): outcome = "WIN"; break
+                    else:
+                        if future_high >= entry + risk: outcome = "LOSS"; break
+                        if future_low <= entry - (risk * 1.5): outcome = "WIN"; break
+                
+                if outcome == "WIN": wins += 1
+                elif outcome == "LOSS": losses += 1
+
+        total = wins + losses
+        wr = (wins/total*100) if total > 0 else 0
+        send_telegram(f"📊 *Backtest Result: {coin} ({tf})*\n\n"
+                      f"🟢 Wins: {wins}\n🔴 Losses: {losses}\n"
+                      f"📈 *Win Rate:* {wr:.1f}%\n"
+                      f"⏱️ Tested on last {total} signals.")
+    except Exception as e:
+        send_telegram("❌ Backtest failed. Check coin name.")
 
 # ---------------- TELEGRAM COMMANDS ----------------
 def telegram_commands():
+    global SCAN_TIMEFRAME
     offset = 0
     while True:
         try:
@@ -139,103 +227,49 @@ def telegram_commands():
                         chat_id = update.get("message", {}).get("chat", {}).get("id")
                     
                     if str(chat_id) == str(TG_CHAT_ID):
-                        # --- MENU ---
                         if text in ["/start", "/menu"]:
                             markup = {"inline_keyboard": [
-                                [{"text": "📊 Status", "callback_data": "/status"}, {"text": "🏆 Top Gainers", "callback_data": "/top"}],
-                                [{"text": "📉 Top Losers", "callback_data": "/bottom"}, {"text": "📈 Active Trades", "callback_data": "/trades"}],
-                                [{"text": "🔍 Search Coin", "callback_data": "/search BTC"}, {"text": "🔬 Deep Analysis", "callback_data": "/analysis BTC"}]
+                                [{"text": "📊 Status", "callback_data": "/status"}, {"text": "🏆 Gainers", "callback_data": "/top"}],
+                                [{"text": "📉 Losers", "callback_data": "/bottom"}, {"text": "📈 Trades", "callback_data": "/trades"}],
+                                [{"text": "🔬 Analysis", "callback_data": "/analysis BTC"}, {"text": "📓 Journal", "callback_data": "/journal"}]
                             ]}
-                            send_telegram("👋 *Welcome to God-Tier Bot!*\nSelect an option or type commands:", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome V7!*\nCurrent Scan TF: *{SCAN_TIMEFRAME}*\nUse `/scan 1h` to change.", reply_markup=markup)
                         
-                        # --- STATUS ---
                         elif text == "/status":
-                            send_telegram(f"🤖 *Bot Running*\nActive Trades: {len(active_trades)}\nActive Alerts: {len(price_alerts)}")
-                        
-                        # --- ACTIVE TRADES ---
-                        elif text == "/trades":
-                            if not active_trades: send_telegram("💤 *No active trades.*")
+                            send_telegram(f"🤖 *Bot Running*\nScanning: {SCAN_TIMEFRAME}\nActive Trades: {len(active_trades)}\nAlerts: {len(price_alerts)}")
+
+                        elif text == "/journal":
+                            j = get_journal()
+                            if not j: send_telegram("📓 Journal is empty.")
                             else:
-                                t_text = "📈 *Active Trades:*\n\n"
-                                for s, t in active_trades.items():
-                                    t_text += f"🪙 *{s.replace('B-','').replace('I-','').replace('_','')}* ({t['type']})\nEntry: {t['entry']:.4f} | SL: {t['sl']:.4f}\n\n"
-                                send_telegram(t_text)
-                        
-                        # --- TOP GAINERS ---
-                        elif text == "/top":
-                            send_telegram("⏳ Fetching top movers...")
-                            try:
-                                data = get_ticker_data()
-                                valid = [{'m': str(c.get('market')), 'c': float(c.get('change24hour', 0)), 'p': float(c.get('last_price', 0)), 'v': float(c.get('volume', 0))} for c in data if isinstance(c, dict) and ('USDT' in str(c.get('market')) or 'INR' in str(c.get('market')))]
-                                top = sorted(valid, key=lambda x: x['c'], reverse=True)[:5]
-                                msg = "🏆 <b>Top 5 Gainers (24h)</b>\n\n"
-                                for i, c in enumerate(top): 
-                                    msg += f"{i+1}. <b>{c['m'].replace('B-','').replace('I-','').replace('_','')}</b>\n📈 +{c['c']:.2f}% | 💰 {c['p']}\n📊 Vol: {c['v']:,.0f}\n\n"
-                                requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"})
-                            except: send_telegram("❌ API Error.")
+                                msg = "📓 *Trade Journal (Last 5)*\n\n"
+                                for t in j[-5:]:
+                                    msg += f"🪙 {t['coin']} ({t['type']})\nResult: {t['result']}\n\n"
+                                send_telegram(msg)
 
-                        # --- TOP LOSERS (NEW) ---
-                        elif text == "/bottom":
-                            send_telegram("⏳ Fetching top losers...")
-                            try:
-                                data = get_ticker_data()
-                                valid = [{'m': str(c.get('market')), 'c': float(c.get('change24hour', 0)), 'p': float(c.get('last_price', 0)), 'v': float(c.get('volume', 0))} for c in data if isinstance(c, dict) and ('USDT' in str(c.get('market')) or 'INR' in str(c.get('market')))]
-                                bottom = sorted(valid, key=lambda x: x['c'], reverse=False)[:5]
-                                msg = "📉 <b>Top 5 Losers (24h)</b>\n\n"
-                                for i, c in enumerate(bottom): 
-                                    msg += f"{i+1}. <b>{c['m'].replace('B-','').replace('I-','').replace('_','')}</b>\n📉 {c['c']:.2f}% | 💰 {c['p']}\n📊 Vol: {c['v']:,.0f}\n\n"
-                                requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"})
-                            except: send_telegram("❌ API Error.")
-
-                        # --- SET PRICE ALERT (NEW) ---
-                        elif text.startswith("/alert"):
+                        elif text.startswith("/scan"):
                             parts = text.split()
-                            if len(parts) == 3:
-                                target_coin = parts[1].upper()
-                                try:
-                                    target_price = float(parts[2])
-                                    data = get_ticker_data()
-                                    found = False
-                                    for c in data:
-                                        if isinstance(c, dict):
-                                            m = str(c.get('market'))
-                                            m_clean = m.replace("B-", "").replace("I-", "").replace("_USDT", "").replace("_INR", "").replace("USDT", "").replace("INR", "")
-                                            if m_clean == target_coin:
-                                                curr_p = float(c.get('last_price', 0))
-                                                alert_type = 'above' if target_price > curr_p else 'below'
-                                                price_alerts[m] = {'price': target_price, 'type': alert_type}
-                                                send_telegram(f"✅ Alert set for {target_coin} at {target_price} (Current: {curr_p})")
-                                                found = True
-                                                break
-                                    if not found: send_telegram("❌ Coin not found.")
-                                except: send_telegram("❌ Invalid price format.")
-                            else: send_telegram("⚠️ Format: `/alert BTC 65000`")
+                            if len(parts) > 1 and parts[1] in ['1m','5m','15m','1h','4h']:
+                                SCAN_TIMEFRAME = parts[1]
+                                send_telegram(f"✅ Scanner timeframe changed to *{SCAN_TIMEFRAME}*.")
+                            else:
+                                send_telegram("⚠️ Use: `/scan 15m` or `/scan 1h`")
 
-                        # --- DEEP ANALYSIS (NEW) ---
+                        elif text.startswith("/backtest"):
+                            parts = text.split()
+                            if len(parts) >= 3:
+                                Thread(target=run_backtest, args=(parts[1].upper(), parts[2])).start()
+                            else:
+                                send_telegram("⚠️ Use: `/backtest BTC 15m`")
+
                         elif text.startswith("/analysis"):
                             parts = text.split()
                             if len(parts) > 1:
                                 target = parts[1].upper()
-                                send_telegram(f"⏳ Running deep analysis for *{target}*...")
+                                send_telegram(f"⏳ Analyzing *{target}*...")
                                 try:
-                                    data = get_ticker_data()
-                                    matched = None
-                                    for c in data:
-                                        if isinstance(c, dict):
-                                            m = str(c.get('market'))
-                                            m_clean = m.replace("B-", "").replace("I-", "").replace("_USDT", "").replace("_INR", "").replace("USDT", "").replace("INR", "")
-                                            if m_clean == target:
-                                                matched = m
-                                                if 'USDT' in m: break
-                                    if not matched: 
-                                        send_telegram("❌ Coin not found.")
-                                        continue
-                                    
-                                    c_sym = matched
-                                    if '_' not in c_sym and 'USDT' in c_sym: c_sym = 'B-' + c_sym.replace('USDT', '_USDT')
-                                    elif '_' not in c_sym and 'INR' in c_sym: c_sym = 'I-' + c_sym.replace('INR', '_INR')
-                                    
-                                    msg = f"🔬 <b>Deep Analysis: {target}</b>\n\n"
+                                    c_sym = f"B-{target}_USDT"
+                                    msg = f"🔬 <b>Analysis: {target}</b>\n\n"
                                     for tf in ['15m', '1h', '4h']:
                                         res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval={tf}&limit=200", headers=headers, timeout=5).json()
                                         if isinstance(res, list) and len(res) >= 50:
@@ -243,22 +277,18 @@ def telegram_commands():
                                             closes = [float(c['close']) for c in res]
                                             ema50 = pd.Series(closes).ewm(span=50, adjust=False).mean().iloc[-1]
                                             trend = "🟢 BULLISH" if closes[-1] > ema50 else "🔴 BEARISH"
-                                            
-                                            # Simple RSI calc
                                             s = pd.Series(closes)
                                             delta = s.diff()
                                             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
                                             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
                                             rsi = 100 - (100 / (1 + (gain / loss))).iloc[-1]
-                                            
-                                            msg += f"⏱️ <b>{tf} Trend:</b> {trend}\n📊 RSI: {rsi:.2f}\n\n"
+                                            msg += f"⏱️ <b>{tf} Trend:</b> {trend} (RSI: {rsi:.1f})\n"
                                     requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"})
-                                except Exception as e: send_telegram("❌ Analysis Error.")
-                            else: send_telegram("⚠️ Format: `/analysis BTC`")
+                                except: send_telegram("❌ Error.")
         except: pass
         time.sleep(2)
 
-# ---------------- INDICATORS (WITH ADX) ----------------
+# ---------------- INDICATORS (WITH VWAP) ----------------
 def calculate_indicators(df):
     df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
     delta = df['close'].diff()
@@ -271,7 +301,6 @@ def calculate_indicators(df):
     df['macd'] = df['ema12'] - df['ema26']
     df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     
-    # ADX Calculation (To avoid sideways markets)
     df['up_move'] = df['high'] - df['high'].shift(1)
     df['down_move'] = df['low'].shift(1) - df['low']
     df['plus_dm'] = df['up_move'].where((df['up_move'] > df['down_move']) & (df['up_move'] > 0), 0.0)
@@ -284,29 +313,29 @@ def calculate_indicators(df):
     df['adx'] = df['dx'].ewm(alpha=1/14, adjust=False).mean()
     
     df['atr'] = df['tr'].rolling(window=14).mean()
+    
+    # VWAP Calculation
+    df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
+    
     return df
 
-# ---------------- MARKET SCANNER ----------------
+# ---------------- SCANNER ----------------
 def scan_market():
+    global SCAN_TIMEFRAME
     try:
         data = get_ticker_data()
         if not data: return
-        all_coins = [str(c.get('market', '')) for c in data if isinstance(c, dict) and ('USDT' in str(c.get('market', '')) or 'INR' in str(c.get('market', ''))) and float(c.get('volume', 0)) > 50000]
+        all_coins = [str(c.get('market', '')) for c in data if isinstance(c, dict) and ('USDT' in str(c.get('market', ''))) and float(c.get('volume', 0)) > 50000]
         
         for sym in all_coins:
             if sym in active_trades: continue
-            
-            # 4-Hour Cooldown Check
-            now_time = time.time()
-            if sym in last_signal_time and (now_time - last_signal_time[sym] < 4 * 3600):
-                continue
+            if sym in last_signal_time and (time.time() - last_signal_time[sym] < 4 * 3600): continue
 
             try:
                 c_sym = sym
-                if '_' not in c_sym and 'USDT' in c_sym: c_sym = 'B-' + c_sym.replace('USDT', '_USDT')
-                elif '_' not in c_sym and 'INR' in c_sym: c_sym = 'I-' + c_sym.replace('INR', '_INR')
+                if '_' not in c_sym: c_sym = 'B-' + c_sym.replace('USDT', '_USDT')
 
-                k_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval=15m&limit=200", headers=headers, timeout=5).json()
+                k_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval={SCAN_TIMEFRAME}&limit=200", headers=headers, timeout=5).json()
                 if not isinstance(k_res, list) or len(k_res) < 200: continue
                 k_res.reverse() 
                 df = pd.DataFrame(k_res)
@@ -314,25 +343,33 @@ def scan_market():
                 df = calculate_indicators(df)
                 
                 last, prev = df.iloc[-1], df.iloc[-2]
-                current_price, ema200, rsi, atr, adx = last['close'], last['ema200'], last['rsi'], last['atr'], last['adx']
+                current_price, ema200, rsi, atr, adx, vwap = last['close'], last['ema200'], last['rsi'], last['atr'], last['adx'], last['vwap']
                 
                 macd_up = (prev['macd'] < prev['macd_signal']) and (last['macd'] > last['macd_signal'])
                 macd_down = (prev['macd'] > prev['macd_signal']) and (last['macd'] < last['macd_signal'])
                 vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.5)
 
+                # Fibonacci Levels (Recent High/Low)
+                recent_high = df['high'].tail(50).max()
+                recent_low = df['low'].tail(50).min()
+                fib_618 = recent_high - (recent_high - recent_low) * 0.618
+                fib_50 = recent_high - (recent_high - recent_low) * 0.5
+
                 signal = None
-                # STRICT: ADX must be > 25 to confirm trend (No sideways market)
+                # STRICT: ADX > 25, Price > VWAP (Bullish), Price near Fib level
                 if adx > 25 and vol_spike:
-                    if macd_up and current_price > ema200 and rsi > 50:
-                        h4 = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval=4h&limit=100", headers=headers, timeout=5).json()
-                        if isinstance(h4, list) and len(h4) >= 50:
-                            h4.reverse()
-                            h4_ema50 = pd.Series([float(c['close']) for c in h4]).ewm(span=50, adjust=False).mean().iloc[-1]
-                            if current_price > h4_ema50: signal = "BUY"
-                            
-                    elif macd_down and current_price < ema200 and rsi < 50:
-                        h4 = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval=4h&limit=100", headers=headers, timeout=5).json()
-                        if isinstance(h4, list) and len(h4) >= 50:
+                    if macd_up and current_price > ema200 and current_price > vwap and rsi > 50:
+                        # Check if price is near 0.5 - 0.618 Fib zone
+                        if fib_618 <= current_price <= fib_50 or (current_price > fib_50 and current_price < fib_50 * 1.01):
+                            h4 = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval=4h&limit=100", headers=headers, timeout=5).json()
+                            if isinstance(h4, list) and len(h4) >= 50:
+                                h4.reverse()
+                                h4_ema50 = pd.Series([float(c['close']) for c in h4]).ewm(span=50, adjust=False).mean().iloc[-1]
+                                if current_price > h4_ema50: signal = "BUY"
+                                
+                    elif macd_down and current_price < ema200 and current_price < vwap and rsi < 50:
+                         h4 = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval=4h&limit=100", headers=headers, timeout=5).json()
+                         if isinstance(h4, list) and len(h4) >= 50:
                             h4.reverse()
                             h4_ema50 = pd.Series([float(c['close']) for c in h4]).ewm(span=50, adjust=False).mean().iloc[-1]
                             if current_price < h4_ema50: signal = "SELL"
@@ -350,15 +387,14 @@ def scan_market():
                     active_trades[sym] = {'type': signal, 'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'status': 'OPEN'}
                     last_signal_time[sym] = time.time() 
                     
-                    clean_sym = sym.replace("B-", "").replace("I-", "").replace("_", "")
+                    clean_sym = sym.replace("B-", "").replace("_", "")
                     dcx_link = f"https://coindcx.com/trade/{clean_sym}"
                     
-                    text = (f"🎯 *SNIPER {signal} SIGNAL*\n\n"
+                    text = (f"🎯 *SNIPER {signal} ({SCAN_TIMEFRAME})*\n\n"
                             f"🪙 *Coin:* {clean_sym}\n"
                             f"💰 *Entry:* {entry:.4f}\n🛑 *SL:* {sl:.4f}\n"
                             f"🎯 *TP1:* {tp1:.4f}\n🎯 *TP2:* {tp2:.4f}\n🎯 *TP3:* {tp3:.4f}\n"
-                            f"📊 *ADX:* {adx:.1f} (Strong Trend)\n"
-                            f"⏱️ *TF:* 15m\n\n"
+                            f"📊 *ADX:* {adx:.1f} | *VWAP:* ✅\n"
                             f"💡 _Trailing SL Active._")
                     
                     markup = {"inline_keyboard": [[{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], [{"text": "🌐 Open Web Chart", "url": dcx_link}]]}
