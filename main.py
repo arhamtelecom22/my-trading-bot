@@ -19,6 +19,19 @@ last_signal_time = {}
 watchlist = set()
 SCAN_TIMEFRAME = "15m"
 
+# ---------------- SMART PRICE FORMATTER ----------------
+def fmt(p):
+    try:
+        p = float(p)
+        if p >= 1000: return f"{p:.2f}"
+        if p >= 10: return f"{p:.3f}"
+        if p >= 1: return f"{p:.4f}"
+        if p >= 0.01: return f"{p:.5f}"
+        if p >= 0.0001: return f"{p:.6f}"
+        return f"{p:.8f}"
+    except:
+        return str(p)
+
 # ---------------- PERMANENT MEMORY (FILE SAVE) ----------------
 def load_active_trades():
     global active_trades
@@ -74,7 +87,7 @@ def home():
                 <h3>{clean} ({t['type']})</h3>
                 <table>
                     <tr><th>Entry</th><th>SL</th><th>TP1</th><th>TP2</th><th>TP3</th></tr>
-                    <tr><td>{t['entry']:.4f}</td><td>{t['sl']:.4f}</td><td>{t['tp1']:.4f}</td><td>{t['tp2']:.4f}</td><td>{t['tp3']:.4f}</td></tr>
+                    <tr><td>{fmt(t['entry'])}</td><td>{fmt(t['sl'])}</td><td>{fmt(t['tp1'])}</td><td>{fmt(t['tp2'])}</td><td>{fmt(t['tp3'])}</td></tr>
                 </table>
                 <p style='color:#888; font-size:12px;'>Status: {t['status']}</p>
             </div>
@@ -157,7 +170,7 @@ def monitor_trades():
                     alert_type = alert_data['type']
                     if (alert_type == 'above' and curr_price >= target) or (alert_type == 'below' and curr_price <= target):
                         clean = sym.replace("B-", "").replace("I-", "").replace("_", "")
-                        send_telegram(f"🚨 *PRICE ALERT!*\n\n🪙 *Coin:* {clean}\n💰 *Target:* {target}\n📈 *Current:* {curr_price}")
+                        send_telegram(f"🚨 *PRICE ALERT!*\n\n🪙 *Coin:* {clean}\n💰 *Target:* {fmt(target)}\n📈 *Current:* {fmt(curr_price)}")
                         del price_alerts[sym]
             
             for sym, trade in list(active_trades.items()):
@@ -174,7 +187,7 @@ def monitor_trades():
                 if signal == "BUY":
                     if curr_price > trade['highest']: trade['highest'] = curr_price
                     if curr_price <= sl:
-                        res_text = f"❌ *{clean_sym} Hit STOP LOSS*\nPrice: {curr_price:.4f}"
+                        res_text = f"❌ *{clean_sym} Hit STOP LOSS*\nPrice: {fmt(curr_price)}"
                         save_to_journal({'date': str(datetime.datetime.now()), 'coin': clean_sym, 'type': 'BUY', 'result': 'LOSS'})
                         del active_trades[sym]
                         save_active_trades()
@@ -186,16 +199,16 @@ def monitor_trades():
                     elif curr_price >= tp2 and trade['status'] == "TP1_HIT":
                         trade['sl'] = tp1 
                         trade['status'] = "TP2_HIT"
-                        res_text = f"🔥 *{clean_sym} Hit TP2*\nSL moved to TP1."
+                        res_text = f"🔥 *{clean_sym} Hit TP2*\nSL moved to TP1 ({fmt(tp1)})."
                         save_active_trades()
                     elif curr_price >= tp1 and trade['status'] == "OPEN":
                         trade['sl'] = entry 
                         trade['status'] = "TP1_HIT"
-                        res_text = f"✅ *{clean_sym} Hit TP1*\nSL moved to Entry."
+                        res_text = f"✅ *{clean_sym} Hit TP1*\nSL moved to Entry ({fmt(entry)})."
                         save_active_trades()
                         
                     if trade.get('status') == "TP2_HIT" and curr_price <= (trade['highest'] * 0.995):
-                        res_text = f"🏃‍♂️ *{clean_sym} Trailing TP Hit!*"
+                        res_text = f"🏃‍♂️ *{clean_sym} Trailing TP Hit!*\nBook Remaining Profit."
                         save_to_journal({'date': str(datetime.datetime.now()), 'coin': clean_sym, 'type': 'BUY', 'result': 'WIN'})
                         del active_trades[sym]
                         save_active_trades()
@@ -203,7 +216,7 @@ def monitor_trades():
                 elif signal == "SELL":
                     if curr_price < trade['lowest']: trade['lowest'] = curr_price
                     if curr_price >= sl:
-                        res_text = f"❌ *{clean_sym} Hit STOP LOSS*\nPrice: {curr_price:.4f}"
+                        res_text = f"❌ *{clean_sym} Hit STOP LOSS*\nPrice: {fmt(curr_price)}"
                         save_to_journal({'date': str(datetime.datetime.now()), 'coin': clean_sym, 'type': 'SELL', 'result': 'LOSS'})
                         del active_trades[sym]
                         save_active_trades()
@@ -215,16 +228,16 @@ def monitor_trades():
                     elif curr_price <= tp2 and trade['status'] == "TP1_HIT":
                         trade['sl'] = tp1 
                         trade['status'] = "TP2_HIT"
-                        res_text = f"🔥 *{clean_sym} Hit TP2*\nSL moved to TP1."
+                        res_text = f"🔥 *{clean_sym} Hit TP2*\nSL moved to TP1 ({fmt(tp1)})."
                         save_active_trades()
                     elif curr_price <= tp1 and trade['status'] == "OPEN":
                         trade['sl'] = entry 
                         trade['status'] = "TP1_HIT"
-                        res_text = f"✅ *{clean_sym} Hit TP1*\nSL moved to Entry."
+                        res_text = f"✅ *{clean_sym} Hit TP1*\nSL moved to Entry ({fmt(entry)})."
                         save_active_trades()
                         
                     if trade.get('status') == "TP2_HIT" and curr_price >= (trade['lowest'] * 1.005):
-                        res_text = f"🏃‍♂️ *{clean_sym} Trailing TP Hit!*"
+                        res_text = f"🏃‍♂️ *{clean_sym} Trailing TP Hit!*\nBook Remaining Profit."
                         save_to_journal({'date': str(datetime.datetime.now()), 'coin': clean_sym, 'type': 'SELL', 'result': 'WIN'})
                         del active_trades[sym]
                         save_active_trades()
@@ -249,7 +262,6 @@ def run_backtest(coin, tf):
         for i in range(200, len(df)-10):
             row, prev = df.iloc[i], df.iloc[i-1]
             
-            # Retest logic
             prev_ema50 = prev['ema50']
             pullback_buy = abs(prev['low'] - prev_ema50) / prev_ema50 < 0.005
             bounce_buy = (row['close'] > row['open']) and (row['close'] > prev['high'])
@@ -326,7 +338,7 @@ def telegram_commands():
                                 is_top = text == "/top"
                                 sorted_coins = sorted(valid, key=lambda x: x['c'], reverse=is_top)[:5]
                                 msg = f"{'🏆 Top Gainers' if is_top else '📉 Top Losers'}\n\n"
-                                for i, c in enumerate(sorted_coins): msg += f"{i+1}. <b>{c['m'].replace('B-','').replace('_','')}</b>: {c['c']:.2f}% | {c['p']}\n"
+                                for i, c in enumerate(sorted_coins): msg += f"{i+1}. <b>{c['m'].replace('B-','').replace('_','')}</b>: {c['c']:.2f}% | {fmt(c['p'])}\n"
                                 requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"})
                             except: send_telegram("❌ API Error.")
 
@@ -371,7 +383,7 @@ def telegram_commands():
 
                                     clean_sym = m_sym.replace("B-", "").replace("I-", "").replace("_", "")
                                     msg = (f"🔍 <b>{clean_sym} Details</b>\n\n"
-                                           f"💰 <b>Price:</b> {price}\n"
+                                           f"💰 <b>Price:</b> {fmt(price)}\n"
                                            f"📈 <b>24h Change:</b> {change_24h:.2f}%\n"
                                            f"📊 <b>24h Volume:</b> {vol_24h:,.0f}\n"
                                            f"🚀 <b>1H Trend:</b> {trend}\n"
@@ -395,7 +407,7 @@ def telegram_commands():
                                         current = float(res[-1]['close'])
                                         support = min(lows[-20:])
                                         resistance = max(highs[-20:])
-                                        msg = (f"📉 *Zones ({target})*\n\n💰 Current: {current:.4f}\n🟢 *Support:* {support:.4f}\n🔴 *Resistance:* {resistance:.4f}")
+                                        msg = (f"📉 *Zones ({target})*\n\n💰 Current: {fmt(current)}\n🟢 *Support:* {fmt(support)}\n🔴 *Resistance:* {fmt(resistance)}")
                                         send_telegram(msg)
                                     else: send_telegram("❌ Data not found.")
                                 except: send_telegram("❌ Error.")
@@ -409,7 +421,7 @@ def telegram_commands():
                                 for c in data:
                                     if isinstance(c, dict) and target in str(c.get('market')):
                                         price_alerts[str(c.get('market'))] = {'price': pr, 'type': 'above' if pr > float(c.get('last_price', 0)) else 'below'}
-                                        send_telegram(f"✅ Alert set for {target} at {pr}")
+                                        send_telegram(f"✅ Alert set for {target} at {fmt(pr)}")
                                         break
                             else: send_telegram("⚠️ Use: `/alert BTC 65000`")
 
@@ -500,13 +512,11 @@ def scan_market():
                 
                 vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.5)
                 
-                # --- RETEST LOGIC (Strong Signal) ---
+                # RETEST LOGIC
                 prev_ema50 = prev['ema50']
-                # BUY: Price > EMA200 (Trend Up), Prev Candle touched EMA50 (Pullback), Current is Bullish (Bounce)
-                pullback_buy = abs(prev['low'] - prev_ema50) / prev_ema50 < 0.005 # Within 0.5% of EMA50
+                pullback_buy = abs(prev['low'] - prev_ema50) / prev_ema50 < 0.005
                 bounce_buy = (current_price > last['open']) and (current_price > prev['high'])
                 
-                # SELL: Price < EMA200 (Trend Down), Prev Candle touched EMA50 (Pullback), Current is Bearish (Rejection)
                 pullback_sell = abs(prev['high'] - prev_ema50) / prev_ema50 < 0.005
                 rejection_sell = (current_price < last['open']) and (current_price < prev['low'])
 
@@ -524,14 +534,14 @@ def scan_market():
 
                     active_trades[sym] = {'type': signal, 'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'status': 'OPEN'}
                     last_signal_time[sym] = time.time() 
-                    save_active_trades() # Save to permanent memory
+                    save_active_trades()
                     
                     clean_sym = sym.replace("B-", "").replace("I-", "").replace("_", "")
                     dcx_link = f"https://coindcx.com/trade/{clean_sym}"
                     
                     text = (f"🎯 *cripto_adda {signal} (RETEST)*\n\n🪙 *Coin:* {clean_sym}\n"
-                            f"💰 *Entry:* {entry:.4f}\n🛑 *SL:* {sl:.4f}\n"
-                            f"🎯 *TP1:* {tp1:.4f}\n🎯 *TP2:* {tp2:.4f}\n🎯 *TP3:* {tp3:.4f}\n"
+                            f"💰 *Entry:* {fmt(entry)}\n🛑 *SL:* {fmt(sl)}\n"
+                            f"🎯 *TP1:* {fmt(tp1)}\n🎯 *TP2:* {fmt(tp2)}\n🎯 *TP3:* {fmt(tp3)}\n"
                             f"📊 *ADX:* {adx:.1f} | *VWAP:* ✅ | *Whale:* ✅\n"
                             f"⏱️ *TF:* {SCAN_TIMEFRAME}")
                     
@@ -542,7 +552,7 @@ def scan_market():
     except: pass
 
 if __name__ == "__main__":
-    load_active_trades() # Load trades on start
+    load_active_trades()
     keep_alive()
     Thread(target=monitor_trades).start()
     Thread(target=telegram_commands).start()
