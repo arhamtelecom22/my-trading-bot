@@ -1,19 +1,20 @@
+import os
 import requests
 import time
 import pandas as pd
 from flask import Flask
 from threading import Thread
 
-# ================= APNI DETAILS YAHAN DAALO =================
-TG_TOKEN = "9084884390:AAER1W7o63uWPGu3d5T-NrTZTOIN-In6oPs"   # Yahan apna Bot Token daalo
-TG_CHAT_ID = "762295473"   # Yahan apni Chat ID daalo
+# ================= TOKEN AB RENDER SE AAYEGA =================
+TG_TOKEN = os.environ.get("9084884390:AAEoMttu-_hqxIIjiCACwhVIddofe_hh-IU")  # Yeh Render se aayega
+TG_CHAT_ID = "762295473"               # Chat ID
 # ============================================================
 
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "CoinDCX Pro Scanner (USDT + INR) is Running 24/7!"
+    return "CoinDCX Pro Scanner is Running 24/7!"
 
 def run():
     app.run(host='0.0.0.0', port=8080)
@@ -23,6 +24,9 @@ def keep_alive():
     t.start()
 
 def send_telegram(text):
+    if not TG_TOKEN:
+        print("ERROR: TG_TOKEN is not set in Render Environment Variables!")
+        return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     payload = {"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
     try:
@@ -52,7 +56,6 @@ def scan_market():
         
         all_coins = []
         for c in data:
-            # Yahan humne USDT aur INR dono add kar diye hain
             if c['market'].endswith("_USDT") or c['market'].endswith("_INR"):
                 try:
                     if float(c.get('volume', 0)) > 20000:
@@ -83,10 +86,13 @@ def scan_market():
                 prev_macd = prev['macd']
                 atr = last['atr']
 
+                # Relaxed Volume Spike (1.2x)
                 avg_vol = df_15m['volume'].tail(20).mean()
-                vol_spike = last['volume'] > (avg_vol * 1.5)
-                macd_cross_up = prev_macd < 0 and macd > 0
-                macd_cross_down = prev_macd > 0 and macd < 0
+                vol_spike = last['volume'] > (avg_vol * 1.2)
+                
+                # MACD Cross (Last 2 candles)
+                macd_cross_up = (prev_macd < 0 and macd > 0) or (df_15m.iloc[-3]['macd'] < 0 and prev_macd > 0)
+                macd_cross_down = (prev_macd > 0 and macd < 0) or (df_15m.iloc[-3]['macd'] > 0 and prev_macd < 0)
 
                 signal = None
                 
@@ -97,7 +103,8 @@ def scan_market():
                         h1_data.reverse()
                         h1_closes = [float(c['close']) for c in h1_data]
                         h1_ema50 = pd.Series(h1_closes).ewm(span=50, adjust=False).mean().iloc[-1]
-                        if current_price > ema200 and 40 < rsi < 70 and h1_closes[-1] > h1_ema50:
+                        # Relaxed RSI (35 to 75)
+                        if current_price > ema200 and 35 < rsi < 75 and h1_closes[-1] > h1_ema50:
                             signal = "BUY"
                 
                 elif macd_cross_down and vol_spike:
@@ -107,7 +114,8 @@ def scan_market():
                         h1_data.reverse()
                         h1_closes = [float(c['close']) for c in h1_data]
                         h1_ema50 = pd.Series(h1_closes).ewm(span=50, adjust=False).mean().iloc[-1]
-                        if current_price < ema200 and 30 < rsi < 60 and h1_closes[-1] < h1_ema50:
+                        # Relaxed RSI (25 to 65)
+                        if current_price < ema200 and 25 < rsi < 65 and h1_closes[-1] < h1_ema50:
                             signal = "SELL"
 
                 if signal:
@@ -125,10 +133,8 @@ def scan_market():
                         tp2 = entry - (risk * 3.0)
                         tp3 = entry - (risk * 4.5)
 
-                    # Yahan humne I- ko bhi replace kar diya INR ke liye
                     clean_sym = sym.replace("B-", "").replace("I-", "").replace("_", "")
                     dcx_link = f"https://coindcx.com/trade/{clean_sym}"
-                    
                     market_type = "INR" if "_INR" in sym else "USDT"
 
                     text = (
@@ -160,4 +166,4 @@ if __name__ == "__main__":
     print("Pro Bot Started!")
     while True:
         scan_market()
-        time.sleep(300) 
+        time.sleep(300)
