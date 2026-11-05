@@ -25,7 +25,9 @@ def keep_alive():
     t.start()
 
 def send_telegram(text):
-    if not TG_TOKEN: return
+    if not TG_TOKEN: 
+        print("ERROR: Token not found in Render Environment!")
+        return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     payload = {"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
     try:
@@ -106,10 +108,10 @@ def telegram_commands():
                     if str(chat_id) == str(TG_CHAT_ID):
                         if text == "/status":
                             send_telegram(f"🤖 *Bot Status: RUNNING*\nActive Trades: {len(active_trades)}")
-                                                elif text == "/top":
+                        
+                        elif text == "/top":
                             try:
                                 t_res = requests.get("https://api.coindcx.com/exchange/ticker").json()
-                                # Sirf valid data wale coins filter karo
                                 valid_coins = [c for c in t_res if (c['market'].endswith('_USDT') or c['market'].endswith('_INR')) and 'change24hour' in c]
                                 top = sorted(valid_coins, key=lambda x: float(x.get('change24hour', 0)), reverse=True)[:5]
                                 
@@ -121,7 +123,8 @@ def telegram_commands():
                                 
                                 send_telegram(t_text)
                             except Exception as e:
-                                send_telegram(f"❌ Error: {e}")
+                                send_telegram(f"❌ Error: Could not fetch top movers.")
+
                         elif text.startswith("/trend"):
                             parts = text.split()
                             if len(parts) > 1:
@@ -136,6 +139,8 @@ def telegram_commands():
                                     send_telegram(f"📊 *{target_sym} 1H Trend:*\n{trend}\nCurrent Price: {closes[-1]}")
                                 else:
                                     send_telegram("❌ Could not fetch data. Check symbol format (e.g., /trend BTC).")
+                            else:
+                                send_telegram("⚠️ Please use format: /trend BTC")
         except Exception as e:
             pass
         time.sleep(2)
@@ -201,7 +206,6 @@ def scan_market():
 
                 signal = None
                 
-                # 4-HOUR TREND CHECK
                 if (macd_cross_up and vol_spike) or (macd_cross_down and vol_spike):
                     h4_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={sym}&interval=4h&limit=100", timeout=10)
                     h4_data = h4_res.json()
@@ -226,7 +230,6 @@ def scan_market():
                     else:
                         sl, tp1, tp2, tp3 = entry + risk, entry - (risk * 1.5), entry - (risk * 3.0), entry - (risk * 4.5)
 
-                    # Add to Active Trades
                     active_trades[sym] = {
                         'type': signal, 'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'status': 'OPEN'
                     }
@@ -263,10 +266,9 @@ if __name__ == "__main__":
     keep_alive()
     print("Ultimate Bot Started!")
     
-    # Start Background Threads
     Thread(target=monitor_trades).start()
     Thread(target=telegram_commands).start()
     
     while True:
         scan_market()
-        time.sleep(300) # 5 minute rest
+        time.sleep(300)
