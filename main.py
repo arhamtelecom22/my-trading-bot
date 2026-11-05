@@ -35,7 +35,30 @@ def send_telegram(text):
         print("TG Error:", e)
 
 # API Block na ho isliye Headers
-headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+
+# ---------------- SMART CACHE FOR API (No Rate Limits) ----------------
+last_ticker_data = []
+last_ticker_time = 0
+
+def get_ticker_data():
+    global last_ticker_data, last_ticker_time
+    now = time.time()
+    # Agar 60 second se kam hua hai, toh naya data mat lao, purana use karo
+    if last_ticker_data and (now - last_ticker_time < 60):
+        return last_ticker_data
+        
+    try:
+        res = requests.get("https://api.coindcx.com/exchange/ticker", headers=headers, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            if isinstance(data, list):
+                last_ticker_data = data
+                last_ticker_time = now
+                return data
+    except:
+        pass
+    return last_ticker_data if last_ticker_data else []
 
 # ---------------- ACTIVE TRADES TRACKER ----------------
 active_trades = {}
@@ -47,9 +70,8 @@ def monitor_trades():
             continue
         
         try:
-            res = requests.get("https://api.coindcx.com/exchange/ticker", headers=headers, timeout=10)
-            tickers = res.json()
-            price_map = {t['market']: float(t['last_price']) for t in tickers}
+            tickers = get_ticker_data()
+            price_map = {t['market']: float(t['last_price']) for t in tickers if isinstance(t, dict)}
 
             for sym, trade in list(active_trades.items()):
                 if sym not in price_map: continue
@@ -112,27 +134,30 @@ def telegram_commands():
                             send_telegram(f"🤖 *Bot Status: RUNNING*\nActive Trades: {len(active_trades)}")
                         
                         elif text == "/top":
+                            send_telegram("⏳ Fetching top movers...")
                             try:
-                                t_res = requests.get("https://api.coindcx.com/exchange/ticker", headers=headers, timeout=10).json()
+                                # Smart cache use kar rahe hain, rate limit nahi hogi
+                                data = get_ticker_data()
+                                if not data:
+                                    send_telegram("❌ CoinDCX API is not responding. Try again in 1 min.")
+                                    continue
+                                
                                 valid_coins = []
-                                for c in t_res:
-                                    # Robust extraction of change24hour
-                                    change_val = c.get('change24hour')
-                                    if change_val is not None and str(change_val).strip() != "":
+                                for c in data:
+                                    if not isinstance(c, dict): continue
+                                    m = c.get('market', '')
+                                    if m.endswith('_USDT') or m.endswith('_INR'):
                                         try:
-                                            val = float(change_val)
-                                            market = c.get('market', '')
-                                            # Show only USDT and INR pairs
-                                            if market.endswith('_USDT') or market.endswith('_INR'):
-                                                valid_coins.append({'market': market, 'change': val})
+                                            ch = float(c.get('change24hour', 0))
+                                            valid_coins.append({'market': m, 'change': ch})
                                         except: pass
                                 
+                                if not valid_coins:
+                                    send_telegram("⚠️ Data error. No valid coins found.")
+                                    continue
+                                    
                                 top = sorted(valid_coins, key=lambda x: x['change'], reverse=True)[:5]
                                 
-                                if not top:
-                                    send_telegram("⚠️ Data parsing error. CoinDCX might be updating. Try again.")
-                                    continue
-
                                 t_text = "🏆 <b>Top 5 Gainers (24h)</b>\n\n"
                                 for idx, c in enumerate(top):
                                     sym = c['market'].replace("B-", "").replace("I-", "").replace("_", "")
@@ -140,10 +165,10 @@ def telegram_commands():
                                 
                                 url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
                                 payload = {"chat_id": TG_CHAT_ID, "text": t_text, "parse_mode": "HTML"}
-                                requests.post(url, json=payload)
+                                requests.post(url, json=payload, timeout=10)
                                 
                             except Exception as e:
-                                send_telegram(f"❌ Error: API Down or Slow")
+                                send_telegram(f"❌ Error: {str(e)[:50]}")
 
                         elif text.startswith("/trend"):
                             parts = text.split()
@@ -187,17 +212,20 @@ def calculate_indicators(df):
 def scan_market():
     print("Scanning CoinDCX (Ultimate Mode)...")
     try:
-        res = requests.get("https://api.coindcx.com/exchange/ticker", headers=headers, timeout=10)
-        data = res.json()
-        
+        data = get_ticker_data()
+        if not data:
+            print("No data from CoinDCX, waiting...")
+            return
+
         all_coins = []
         for c in data:
-            if 'market' in c:
-                if c['market'].endswith("_USDT") or c['market'].endswith("_INR"):
-                    try:
-                        if float(c.get('volume', 0)) > 20000 and c['market'] not in active_trades:
-                            all_coins.append(c['market'])
-                    except: pass
+            if not isinstance(c, dict): continue
+            market = c.get('market', '')
+            if market.endswith("_USDT") or market.endswith("_INR"):
+                try:
+                    if float(c.get('volume', 0)) > 20000 and market not in active_trades:
+                        all_coins.append(market)
+                except: pass
         
         print(f"Scanning {len(all_coins)} coins...")
 
