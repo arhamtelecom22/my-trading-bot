@@ -44,7 +44,6 @@ last_ticker_time = 0
 def get_ticker_data():
     global last_ticker_data, last_ticker_time
     now = time.time()
-    # Agar 60 second se kam hua hai, toh naya data mat lao, purana use karo
     if last_ticker_data and (now - last_ticker_time < 60):
         return last_ticker_data
         
@@ -72,7 +71,7 @@ def monitor_trades():
         try:
             tickers = get_ticker_data()
             price_map = {t['market']: float(t['last_price']) for t in tickers if isinstance(t, dict)}
-
+            
             for sym, trade in list(active_trades.items()):
                 if sym not in price_map: continue
                 curr_price = price_map[sym]
@@ -136,7 +135,6 @@ def telegram_commands():
                         elif text == "/top":
                             send_telegram("⏳ Fetching top movers...")
                             try:
-                                # Smart cache use kar rahe hain, rate limit nahi hogi
                                 data = get_ticker_data()
                                 if not data:
                                     send_telegram("❌ CoinDCX API is not responding. Try again in 1 min.")
@@ -147,10 +145,17 @@ def telegram_commands():
                                     if not isinstance(c, dict): continue
                                     m = c.get('market', '')
                                     if m.endswith('_USDT') or m.endswith('_INR'):
+                                        # Robust parsing
+                                        raw_ch = c.get('change24hour', 0)
+                                        if raw_ch is None: raw_ch = 0
                                         try:
-                                            ch = float(c.get('change24hour', 0))
+                                            # Handles numbers, strings, and removes %, commas if any
+                                            clean_ch = str(raw_ch).replace('%', '').replace(',', '').strip()
+                                            ch = float(clean_ch)
                                             valid_coins.append({'market': m, 'change': ch})
-                                        except: pass
+                                        except:
+                                            # Agar phir bhi parse na ho, toh 0 daal do taaki list khaali na rahe
+                                            valid_coins.append({'market': m, 'change': 0.0})
                                 
                                 if not valid_coins:
                                     send_telegram("⚠️ Data error. No valid coins found.")
