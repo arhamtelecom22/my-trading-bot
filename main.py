@@ -32,23 +32,20 @@ def fmt(p):
     except:
         return str(p)
 
-# ---------------- PERMANENT MEMORY (FILE SAVE) ----------------
+# ---------------- PERMANENT MEMORY ----------------
 def load_active_trades():
     global active_trades
     try:
         if os.path.exists("active_trades.json"):
             with open("active_trades.json", "r") as f:
                 active_trades = json.load(f)
-            print(f"Loaded {len(active_trades)} active trades from memory.")
-    except Exception as e:
-        print("Error loading trades:", e)
+    except: pass
 
 def save_active_trades():
     try:
         with open("active_trades.json", "w") as f:
             json.dump(active_trades, f)
-    except Exception as e:
-        print("Error saving trades:", e)
+    except: pass
 
 # ---------------- WEB DASHBOARD ----------------
 @app.route('/')
@@ -259,22 +256,22 @@ def run_backtest(coin, tf):
         df = calculate_indicators(df)
         
         wins, losses = 0, 0
-        for i in range(200, len(df)-10):
+        for i in range(30, len(df)-10): # Start from 30 to get recent high/low
             row, prev = df.iloc[i], df.iloc[i-1]
             
-            prev_ema50 = prev['ema50']
-            pullback_buy = abs(prev['low'] - prev_ema50) / prev_ema50 < 0.005
-            bounce_buy = (row['close'] > row['open']) and (row['close'] > prev['high'])
+            # Liquidity Sweep Logic for Backtest
+            recent_low = df['low'].iloc[i-30:i].min()
+            recent_high = df['high'].iloc[i-30:i].max()
             
-            pullback_sell = abs(prev['high'] - prev_ema50) / prev_ema50 < 0.005
-            rejection_sell = (row['close'] < row['open']) and (row['close'] < prev['low'])
+            sweep_low = (row['low'] < recent_low) and (row['close'] > recent_low)
+            sweep_high = (row['high'] > recent_high) and (row['close'] < recent_high)
             
-            vol_spike = row['volume'] > (df['volume'].iloc[i-20:i].mean() * 1.5)
+            vol_spike = row['volume'] > (df['volume'].iloc[i-20:i].mean() * 2.0)
             
             if row['adx'] > 25 and vol_spike:
-                if row['ema50'] > row['ema200'] and pullback_buy and bounce_buy and row['close'] > row['vwap'] and row['rsi'] > 50:
+                if row['close'] > row['ema200'] and sweep_low and row['close'] > row['open'] and row['close'] > row['vwap'] and row['rsi'] > 50:
                     signal = "BUY"
-                elif row['ema50'] < row['ema200'] and pullback_sell and rejection_sell and row['close'] < row['vwap'] and row['rsi'] < 50:
+                elif row['close'] < row['ema200'] and sweep_high and row['close'] < row['open'] and row['close'] < row['vwap'] and row['rsi'] < 50:
                     signal = "SELL"
                 else:
                     signal = None
@@ -296,7 +293,7 @@ def run_backtest(coin, tf):
         send_telegram(f"📊 *Backtest ({coin} {tf})*\n🟢 Wins: {wins} | 🔴 Losses: {losses}\n📈 *Win Rate:* {wr:.1f}%")
     except: send_telegram("❌ Backtest failed.")
 
-# ---------------- TELEGRAM COMMANDS ----------------
+# ---------------- TELEGRAM COMMANDS & MENU ----------------
 def telegram_commands():
     global SCAN_TIMEFRAME
     offset = 0
@@ -311,14 +308,27 @@ def telegram_commands():
                     chat_id = update.get("message", {}).get("chat", {}).get("id")
                     
                     if str(chat_id) == str(TG_CHAT_ID):
+                        # -------- ADVANCED MENU --------
                         if text in ["/start", "/menu"]:
                             markup = {"inline_keyboard": [
                                 [{"text": "🌐 Web Dashboard", "url": "https://my-trading-bot-9se1.onrender.com"}],
-                                [{"text": "📊 Status", "callback_data": "/status"}, {"text": "🏆 Top Coins", "callback_data": "/top"}],
-                                [{"text": "📉 Losers", "callback_data": "/bottom"}, {"text": "📓 Journal", "callback_data": "/journal"}]
+                                [{"text": "📊 Status", "callback_data": "/status"}, {"text": "📓 Journal", "callback_data": "/journal"}],
+                                [{"text": "🏆 Gainers", "callback_data": "/top"}, {"text": "📉 Losers", "callback_data": "/bottom"}],
+                                [{"text": "🔍 Search Coin", "callback_data": "help_search"}, {"text": "📉 Zones", "callback_data": "help_zones"}],
+                                [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "📝 Backtest", "callback_data": "help_backtest"}],
+                                [{"text": "⚙️ Scan TF", "callback_data": "help_scan"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}]
                             ]}
-                            send_telegram(f"👋 *Welcome to cripto_adda!*\nTF: *{SCAN_TIMEFRAME}* | Watch: *{len(watchlist)}*", reply_markup=markup)
-                        
+                            send_telegram(f"👋 *Welcome to cripto_adda!*\nTF: *{SCAN_TIMEFRAME}* | Watch: *{len(watchlist)}*\n\nSelect an option below:", reply_markup=markup)
+
+                        # -------- BUTTON HELP MENUS --------
+                        elif text == "help_search": send_telegram("🔍 *Search Command:*\nType: `/search BTC`\nExample: `/search ETH`")
+                        elif text == "help_zones": send_telegram("📉 *Zones Command:*\nType: `/zones BTC`\nExample: `/zones SOL`")
+                        elif text == "help_alert": send_telegram("🔔 *Alert Command:*\nType: `/alert BTC 65000`\nExample: `/alert ETH 3000`")
+                        elif text == "help_backtest": send_telegram("📝 *Backtest Command:*\nType: `/backtest BTC 15m`\nExample: `/backtest SOL 1h`")
+                        elif text == "help_scan": send_telegram("⚙️ *Scan Command:*\nType: `/scan 15m` or `/scan 1h`")
+                        elif text == "help_watch": send_telegram("⭐ *Watchlist Command:*\nAdd: `/watch BTC`\nRemove All: `/clearwatch`")
+
+                        # -------- COMMANDS --------
                         elif text == "/status":
                             send_telegram(f"🤖 *cripto_adda Running*\nTF: {SCAN_TIMEFRAME}\nTrades: {len(active_trades)}\nAlerts: {len(price_alerts)}")
                         
@@ -508,23 +518,27 @@ def scan_market():
                 
                 last, prev = df.iloc[-1], df.iloc[-2]
                 current_price = last['close']
-                ema50, ema200, rsi, atr, adx, vwap = last['ema50'], last['ema200'], last['rsi'], last['atr'], last['adx'], last['vwap']
+                ema200, rsi, atr, adx, vwap = last['ema200'], last['rsi'], last['atr'], last['adx'], last['vwap']
                 
-                vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.5)
+                # Ultra Strong Volume & ADX
+                vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 2.0)
                 
-                # RETEST LOGIC
-                prev_ema50 = prev['ema50']
-                pullback_buy = abs(prev['low'] - prev_ema50) / prev_ema50 < 0.005
-                bounce_buy = (current_price > last['open']) and (current_price > prev['high'])
+                # --- LIQUIDITY SWEEP LOGIC ---
+                recent_low = df['low'].iloc[-30:-1].min()
+                recent_high = df['high'].iloc[-30:-1].max()
                 
-                pullback_sell = abs(prev['high'] - prev_ema50) / prev_ema50 < 0.005
-                rejection_sell = (current_price < last['open']) and (current_price < prev['low'])
+                # Sweep Low: Wick went below support, but closed above it (Bullish Rejection)
+                sweep_low = (last['low'] < recent_low) and (current_price > recent_low)
+                # Sweep High: Wick went above resistance, but closed below it (Bearish Rejection)
+                sweep_high = (last['high'] > recent_high) and (current_price < recent_high)
 
                 signal = None
                 if adx > 25 and vol_spike:
-                    if ema50 > ema200 and pullback_buy and bounce_buy and current_price > vwap and rsi > 50:
+                    # BUY: Sweep Low + Close > Open (Green Candle) + Trend Up + VWAP + RSI
+                    if current_price > ema200 and sweep_low and current_price > last['open'] and current_price > vwap and rsi > 50:
                         if check_order_book(c_sym): signal = "BUY"
-                    elif ema50 < ema200 and pullback_sell and rejection_sell and current_price < vwap and rsi < 50:
+                    # SELL: Sweep High + Close < Open (Red Candle) + Trend Down + VWAP + RSI
+                    elif current_price < ema200 and sweep_high and current_price < last['open'] and current_price < vwap and rsi < 50:
                         if check_order_book(c_sym): signal = "SELL"
 
                 if signal:
@@ -539,10 +553,10 @@ def scan_market():
                     clean_sym = sym.replace("B-", "").replace("I-", "").replace("_", "")
                     dcx_link = f"https://coindcx.com/trade/{clean_sym}"
                     
-                    text = (f"🎯 *cripto_adda {signal} (RETEST)*\n\n🪙 *Coin:* {clean_sym}\n"
+                    text = (f"🎯 *cripto_adda {signal} (SWEEP)*\n\n🪙 *Coin:* {clean_sym}\n"
                             f"💰 *Entry:* {fmt(entry)}\n🛑 *SL:* {fmt(sl)}\n"
                             f"🎯 *TP1:* {fmt(tp1)}\n🎯 *TP2:* {fmt(tp2)}\n🎯 *TP3:* {fmt(tp3)}\n"
-                            f"📊 *ADX:* {adx:.1f} | *VWAP:* ✅ | *Whale:* ✅\n"
+                            f"📊 *ADX:* {adx:.1f} | *VWAP:* ✅ | *RSI:* {rsi:.1f}\n"
                             f"⏱️ *TF:* {SCAN_TIMEFRAME}")
                     
                     markup = {"inline_keyboard": [[{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], [{"text": "🌐 Open Web Chart", "url": dcx_link}]]}
