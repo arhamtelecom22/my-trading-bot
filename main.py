@@ -59,26 +59,16 @@ def get_journal():
     except: pass
     return []
 
-# ---------------- CHART GENERATOR (FIXED) ----------------
+# ---------------- CHART GENERATOR ----------------
 def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
     try:
         df_chart = df.tail(30)
-        # Use Line chart instead of Candlestick for reliable rendering
         data_points = [float(row['close']) for _, row in df_chart.iterrows()]
         labels = [str(i) for i in range(len(data_points))]
             
         chart_config = {
             "type": "line",
-            "data": {
-                "labels": labels,
-                "datasets": [{
-                    "data": data_points,
-                    "borderColor": "#ffffff", # White line for price
-                    "borderWidth": 2,
-                    "fill": False,
-                    "tension": 0.1
-                }]
-            },
+            "data": {"labels": labels, "datasets": [{"data": data_points, "borderColor": "#ffffff", "borderWidth": 2, "fill": False, "tension": 0.1}]},
             "options": {
                 "scales": {"x": {"display": False}, "y": {"position": "right", "grid": {"color": "#2a2e39"}, "ticks": {"color": "#fff"}}},
                 "plugins": {"legend": {"display": False}, "annotation": {"annotations": {
@@ -100,9 +90,9 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
 @app.route('/')
 def home():
     html = f"""
-    <html><head><title>cripto_adda V28</title><meta http-equiv="refresh" content="30">
+    <html><head><title>cripto_adda V30</title><meta http-equiv="refresh" content="30">
     <style>body{{background-color:#12161e;color:#e0e0e0;font-family:sans-serif;padding:20px;}}.container{{max-width:900px;margin:auto;}}.card{{background-color:#1a1e29;padding:15px;border-radius:8px;margin-bottom:15px;border:1px solid #2a2e39;}}.buy{{border-left:5px solid #00c864;}}.sell{{border-left:5px solid #ff3c3c;}}table{{width:100%;border-collapse:collapse;margin-top:10px;}}th,td{{text-align:left;padding:8px;border-bottom:1px solid #2a2e39;}}</style></head>
-    <body><div class="container"><h1>🤖 cripto_adda V28</h1>
+    <body><div class="container"><h1>🤖 cripto_adda V30 (India + Crypto)</h1>
     <p>Status: Running 24/7 | TF: {SCAN_TIMEFRAME} | Watchlist: {", ".join(watchlist) if watchlist else "All Coins"}</p><h2>📈 Active Trades</h2>
     """
     if not active_trades: html += "<div class='card'>No active trades. Scanning...</div>"
@@ -149,6 +139,62 @@ def get_ticker_data():
             return last_ticker_data
     except: pass
     return last_ticker_data if last_ticker_data else []
+
+# ---------------- INDIAN MARKET DATA ----------------
+INDIAN_TICKERS = {
+    "NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "SENSEX": "^BSESN",
+    "RELIANCE": "RELIANCE.NS", "TCS": "TCS.NS", "HDFC BANK": "HDFCBANK.NS",
+    "ICICI BANK": "ICICIBANK.NS", "INFOSYS": "INFY.NS", "ITC": "ITC.NS",
+    "SBI": "SBIN.NS", "BHARTI AIRTEL": "BHARTIARTL.NS"
+}
+
+def get_yahoo_data(ticker, interval="15m", range="5d"):
+    try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval={interval}&range={range}"
+        res = requests.get(url, headers=headers, timeout=10).json()
+        result = res['chart']['result'][0]
+        closes = result['indicators']['quote'][0]['close']
+        data = [c for c in closes if c is not None]
+        if len(data) < 50: return None
+        return data
+    except: return None
+
+def scan_indian_market():
+    signals_found = 0
+    for name, ticker in INDIAN_TICKERS.items():
+        closes = get_yahoo_data(ticker)
+        if not closes: continue
+        
+        df = pd.DataFrame(closes, columns=['close'])
+        df = calculate_indicators(df)
+        last, prev = df.iloc[-1], df.iloc[-2]
+        
+        # Simple Breakout + Trend Logic for Stocks
+        signal = None
+        if last['close'] > last['ema200'] and last['rsi'] > 60 and last['close'] > prev['close']:
+            signal = "BUY"
+        elif last['close'] < last['ema200'] and last['rsi'] < 40 and last['close'] < prev['close']:
+            signal = "SELL"
+            
+        if signal:
+            entry = last['close']
+            risk = last['atr'] * 2.0
+            if signal == "BUY": 
+                sl, tp1 = entry - risk, entry + (risk * 2.0)
+            else: 
+                sl, tp1 = entry + risk, entry - (risk * 2.0)
+                
+            text = (
+                f"🇮🇳 *#{name} {signal}*\n\n"
+                f"Price: ₹{fmt(entry)}\n"
+                f"SL: ₹{fmt(sl)}\n"
+                f"Target: ₹{fmt(tp1)}\n\n"
+                f"📊 RSI: {last['rsi']:.1f}"
+            )
+            send_telegram(text)
+            signals_found += 1
+            time.sleep(2)
+    return signals_found
 
 # ---------------- MONITOR TRADES ----------------
 def monitor_trades():
@@ -220,7 +266,7 @@ def monitor_trades():
         except: pass
         time.sleep(15)
 
-# ---------------- MANUAL SIGNAL SCANNER ----------------
+# ---------------- MANUAL SIGNAL SCANNER (CRYPTO) ----------------
 def run_manual_scan(tf):
     global MANUAL_SCAN_ACTIVE
     MANUAL_SCAN_ACTIVE = True
@@ -329,6 +375,9 @@ def telegram_commands():
                         if text in ["/start", "/menu"]:
                             markup = {"inline_keyboard": [
                                 [{"text": "🌐 Dashboard", "url": "https://my-trading-bot-9se1.onrender.com"}, {"text": "🌍 Global", "callback_data": "/global"}],
+                                [{"text": "🇮🇳 Indian Market Scan", "callback_data": "/scanindia"}],
+                                [{"text": "📊 Nifty 50", "callback_data": "/nifty"}, {"text": "🏦 Bank Nifty", "callback_data": "/banknifty"}],
+                                [{"text": "📈 Top Stocks", "callback_data": "/topstocks"}, {"text": "🪙 Crypto INR", "callback_data": "/cryptoinr"}],
                                 [{"text": "🌡️ Sentiment", "callback_data": "/sentiment"}, {"text": "🚀 Pump/Dump", "callback_data": "/pump"}],
                                 [{"text": "🏆 Gainers", "callback_data": "/top"}, {"text": "📉 Losers", "callback_data": "/bottom"}],
                                 [{"text": "📈 Trades", "callback_data": "/trades"}, {"text": "📓 Journal", "callback_data": "/journal"}],
@@ -340,7 +389,46 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}],
                                 [{"text": "🗑️ Clear Watchlist", "callback_data": "/clearwatch"}]
                             ]}
-                            send_telegram(f"👋 *Welcome to cripto_adda V28!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome to cripto_adda V30!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
+
+                        # -------- INDIAN MARKET FEATURES --------
+                        elif text == "/scanindia":
+                            send_telegram("⏳ Scanning Indian Stocks (Nifty, Bank Nifty, Reliance, etc.)...")
+                            Thread(target=scan_indian_market).start()
+                            
+                        elif text == "/nifty":
+                            closes = get_yahoo_data("^NSEI")
+                            if closes:
+                                df = calculate_indicators(pd.DataFrame(closes, columns=['close']))
+                                last = df.iloc[-1]
+                                send_telegram(f"📊 *NIFTY 50*\nPrice: {fmt(last['close'])}\nRSI: {last['rsi']:.1f}\nTrend: {'🟢 BULLISH' if last['close'] > last['ema200'] else '🔴 BEARISH'}")
+                            else: send_telegram("❌ Data unavailable.")
+
+                        elif text == "/banknifty":
+                            closes = get_yahoo_data("^NSEBANK")
+                            if closes:
+                                df = calculate_indicators(pd.DataFrame(closes, columns=['close']))
+                                last = df.iloc[-1]
+                                send_telegram(f"🏦 *BANK NIFTY*\nPrice: {fmt(last['close'])}\nRSI: {last['rsi']:.1f}\nTrend: {'🟢 BULLISH' if last['close'] > last['ema200'] else '🔴 BEARISH'}")
+                            else: send_telegram("❌ Data unavailable.")
+
+                        elif text == "/topstocks":
+                            send_telegram("⏳ Fetching Top Indian Stocks...")
+                            msg = "📈 *Top Indian Stocks (Live)*\n\n"
+                            try:
+                                for name, ticker in INDIAN_TICKERS.items():
+                                    if "NIFTY" in name or "SENSEX" in name: continue
+                                    closes = get_yahoo_data(ticker)
+                                    if closes:
+                                        df = calculate_indicators(pd.DataFrame(closes, columns=['close']))
+                                        last = df.iloc[-1]
+                                        msg += f"*{name}:* ₹{fmt(last['close'])} (RSI: {last['rsi']:.1f})\n"
+                                send_telegram(msg)
+                            except: send_telegram("❌ Error fetching stocks.")
+
+                        elif text == "/cryptoinr":
+                            send_telegram("⏳ Scanning Crypto INR pairs...")
+                            run_manual_scan("15m") # Using manual scan for INR
 
                         # -------- HELP GUIDES --------
                         elif text == "help_search": send_telegram("🔍 *Search Command:*\nType: `/search BTC`")
@@ -352,7 +440,7 @@ def telegram_commands():
                         elif text == "help_scan": send_telegram("⚙️ *Scan TF:*\nChange auto-scan TF: `/scan 15m` or `/scan 1h`")
                         elif text == "help_watch": send_telegram("⭐ *Watchlist:*\nAdd: `/watch BTC,ETH`\nClear: `/clearwatch`")
 
-                        # -------- FEATURES --------
+                        # -------- CRYPTO FEATURES --------
                         elif text.startswith("/signal"):
                             parts = text.split()
                             if len(parts) == 1:
