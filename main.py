@@ -59,13 +59,41 @@ def get_journal():
     except: pass
     return []
 
+# ---------------- CHART GENERATOR ----------------
+def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
+    try:
+        df_chart = df.tail(30)
+        data = []
+        for _, row in df_chart.iterrows():
+            data.append({"o": float(row['open']), "h": float(row['high']), "l": float(row['low']), "c": float(row['close'])})
+            
+        chart_config = {
+            "type": "candlestick",
+            "data": {"datasets": [{"data": data, "color": {"up": "#00c864", "down": "#ff3c3c", "unchanged": "#999999"}}]},
+            "options": {
+                "scales": {"x": {"display": False}, "y": {"position": "right", "grid": {"color": "#2a2e39"}, "ticks": {"color": "#fff"}}},
+                "plugins": {"legend": {"display": False}, "annotation": {"annotations": {
+                    "entryLine": {"type": "line", "yMin": entry, "yMax": entry, "borderColor": "#4a9eff", "borderWidth": 2},
+                    "slLine": {"type": "line", "yMin": sl, "yMax": sl, "borderColor": "#ff3c3c", "borderWidth": 2},
+                    "tp1Line": {"type": "line", "yMin": tp1, "yMax": tp1, "borderColor": "#00c864", "borderWidth": 2},
+                    "tp2Line": {"type": "line", "yMin": tp2, "yMax": tp2, "borderColor": "#00c864", "borderWidth": 1.5},
+                    "tp3Line": {"type": "line", "yMin": tp3, "yMax": tp3, "borderColor": "#00c864", "borderWidth": 1}
+                }}}
+            }
+        }
+        payload = {"chart": chart_config, "width": 800, "height": 450, "backgroundColor": "#131722", "version": "3"}
+        res = requests.post("https://quickchart.io/chart", json=payload, timeout=15)
+        if res.status_code == 200: return res.content
+    except: pass
+    return None
+
 # ---------------- WEB DASHBOARD ----------------
 @app.route('/')
 def home():
     html = f"""
-    <html><head><title>cripto_adda V26</title><meta http-equiv="refresh" content="30">
+    <html><head><title>cripto_adda V27</title><meta http-equiv="refresh" content="30">
     <style>body{{background-color:#12161e;color:#e0e0e0;font-family:sans-serif;padding:20px;}}.container{{max-width:900px;margin:auto;}}.card{{background-color:#1a1e29;padding:15px;border-radius:8px;margin-bottom:15px;border:1px solid #2a2e39;}}.buy{{border-left:5px solid #00c864;}}.sell{{border-left:5px solid #ff3c3c;}}table{{width:100%;border-collapse:collapse;margin-top:10px;}}th,td{{text-align:left;padding:8px;border-bottom:1px solid #2a2e39;}}</style></head>
-    <body><div class="container"><h1>🤖 cripto_adda V26</h1>
+    <body><div class="container"><h1>🤖 cripto_adda V27</h1>
     <p>Status: Running 24/7 | TF: {SCAN_TIMEFRAME} | Watchlist: {", ".join(watchlist) if watchlist else "All Coins"}</p><h2>📈 Active Trades</h2>
     """
     if not active_trades: html += "<div class='card'>No active trades. Scanning...</div>"
@@ -86,6 +114,15 @@ def send_telegram(text, reply_markup=None):
     payload = {"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
     if reply_markup: payload["reply_markup"] = reply_markup
     try: requests.post(url, json=payload)
+    except: pass
+
+def send_telegram_photo(photo_bytes, caption, reply_markup=None):
+    if not TG_TOKEN: return
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
+    files = {'photo': ('chart.png', photo_bytes, 'image/png')}
+    data = {"chat_id": TG_CHAT_ID, "caption": caption, "parse_mode": "Markdown"}
+    if reply_markup: data["reply_markup"] = json.dumps(reply_markup)
+    try: requests.post(url, files=files, data=data)
     except: pass
 
 headers = {'User-Agent': 'Mozilla/5.0'}
@@ -227,14 +264,26 @@ def run_manual_scan(tf):
                     if signal:
                         entry, risk = last['close'], last['atr'] * 2.0 
                         if signal == "BUY": 
-                            sl, tp1 = entry - risk, entry + (risk * 2.0)
+                            sl, tp1, tp2, tp3 = entry - risk, entry + (risk * 2.0), entry + (risk * 3.0), entry + (risk * 4.0)
                         else: 
-                            sl, tp1 = entry + risk, entry - (risk * 2.0)
+                            sl, tp1, tp2, tp3 = entry + risk, entry - (risk * 2.0), entry - (risk * 3.0), entry - (risk * 4.0)
                             
                         clean_sym = m.replace("B-", "").replace("I-", "").replace("_", "")
-                        text = f"🎯 *MANUAL SIGNAL ({tf})*\n\n#{clean_sym} {signal} FROM {fmt(entry)}\n\nSL {fmt(sl)}\n\nTARGET {fmt(tp1)}"
+                        text = (
+                            f"#{clean_sym} {signal} (RETEST)\n\n"
+                            f"Entry: {fmt(entry)}\n"
+                            f"SL: {fmt(sl)}\n"
+                            f"TP1: {fmt(tp1)}\n"
+                            f"TP2: {fmt(tp2)}\n"
+                            f"TP3: {fmt(tp3)}\n\n"
+                            f"#{tf.upper()}TRADE"
+                        )
                         markup = {"inline_keyboard": [[{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], [{"text": "🌐 Chart", "url": f"https://coindcx.com/trade/{clean_sym}"}]]}
-                        send_telegram(text, reply_markup=markup)
+                        
+                        chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1, tp2, tp3)
+                        if chart_img: send_telegram_photo(chart_img, text, reply_markup=markup)
+                        else: send_telegram(text, reply_markup=markup)
+                        
                         signals_found += 1
                         time.sleep(1)
                         
@@ -282,7 +331,7 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}],
                                 [{"text": "🗑️ Clear Watchlist", "callback_data": "/clearwatch"}]
                             ]}
-                            send_telegram(f"👋 *Welcome to cripto_adda V26!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome to cripto_adda V27!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
 
                         # -------- HELP GUIDES --------
                         elif text == "help_search": send_telegram("🔍 *Search Command:*\nType: `/search BTC`")
@@ -594,9 +643,21 @@ def scan_market():
                         save_active_trades()
                         
                         clean_sym = m.replace("B-", "").replace("I-", "").replace("_", "")
-                        text = f"#{clean_sym} {signal} (RETEST) FROM {fmt(entry)}\n\nSL {fmt(sl)}\n\nTARGET {fmt(tp1)}\n\n#{SCAN_TIMEFRAME.upper()}TRADE"
+                        text = (
+                            f"#{clean_sym} {signal} (RETEST)\n\n"
+                            f"Entry: {fmt(entry)}\n"
+                            f"SL: {fmt(sl)}\n"
+                            f"TP1: {fmt(tp1)}\n"
+                            f"TP2: {fmt(tp2)}\n"
+                            f"TP3: {fmt(tp3)}\n\n"
+                            f"#{SCAN_TIMEFRAME.upper()}TRADE"
+                        )
                         markup = {"inline_keyboard": [[{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], [{"text": "🌐 Chart", "url": f"https://coindcx.com/trade/{clean_sym}"}]]}
-                        send_telegram(text, reply_markup=markup)
+                        
+                        chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1, tp2, tp3)
+                        if chart_img: send_telegram_photo(chart_img, text, reply_markup=markup)
+                        else: send_telegram(text, reply_markup=markup)
+                        
                         print(f"Signal Sent: {clean_sym} {signal}")
                         
                 except: pass
