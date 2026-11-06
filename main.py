@@ -59,64 +59,60 @@ def get_journal():
     except: pass
     return []
 
-# ---------------- REAL CANDLESTICK CHART GENERATOR ----------------
+# ---------------- PERFECT CANDLESTICK CHART GENERATOR ----------------
 def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
     try:
         df_chart = df.tail(30).copy()
-        
-        # Prepare Candlestick Data
         data = []
-        for _, row in df_chart.iterrows():
+        for i, row in enumerate(df_chart.itertuples()):
+            # Skip any NaN values
+            if pd.isna(row.open) or pd.isna(row.high) or pd.isna(row.low) or pd.isna(row.close):
+                continue
             data.append({
-                "o": float(row['open']),
-                "h": float(row['high']),
-                "l": float(row['low']),
-                "c": float(row['close'])
+                "x": i,
+                "o": float(row.open),
+                "h": float(row.high),
+                "l": float(row.low),
+                "c": float(row.close)
             })
         
-        labels = [str(i) for i in range(len(data))]
+        if len(data) == 0: return None
+        max_x = len(data) - 1
 
-        # Setup Long/Short Boxes (Annotations)
-        annotations = {}
-        
-        # Entry Line
-        annotations['entryLine'] = {
-            "type": "line", "yMin": entry, "yMax": entry, 
-            "borderColor": "#4a9eff", "borderWidth": 2, "borderDash": [5, 5],
-            "label": {"display": True, "content": "Entry", "position": "start", "color": "#4a9eff", "backgroundColor": "transparent"}
+        # Setup Annotations (Lines and Boxes)
+        annotations = {
+            "entryLine": {
+                "type": "line", "yMin": entry, "yMax": entry, 
+                "borderColor": "#4a9eff", "borderWidth": 2, "borderDash": [5, 5]
+            }
         }
 
         if signal == "BUY":
-            # Profit Zone (Green)
             annotations['profitBox'] = {
                 "type": "box", "yMin": entry, "yMax": tp1,
                 "backgroundColor": "rgba(0, 200, 100, 0.2)", "borderColor": "rgba(0, 200, 100, 0.8)",
-                "xMin": 0, "xMax": len(labels)-1
+                "xMin": 0, "xMax": max_x
             }
-            # Loss Zone (Red)
             annotations['lossBox'] = {
                 "type": "box", "yMin": sl, "yMax": entry,
                 "backgroundColor": "rgba(255, 60, 60, 0.2)", "borderColor": "rgba(255, 60, 60, 0.8)",
-                "xMin": 0, "xMax": len(labels)-1
+                "xMin": 0, "xMax": max_x
             }
         elif signal == "SELL":
-            # Profit Zone (Green)
             annotations['profitBox'] = {
                 "type": "box", "yMin": tp1, "yMax": entry,
                 "backgroundColor": "rgba(0, 200, 100, 0.2)", "borderColor": "rgba(0, 200, 100, 0.8)",
-                "xMin": 0, "xMax": len(labels)-1
+                "xMin": 0, "xMax": max_x
             }
-            # Loss Zone (Red)
             annotations['lossBox'] = {
                 "type": "box", "yMin": entry, "yMax": sl,
                 "backgroundColor": "rgba(255, 60, 60, 0.2)", "borderColor": "rgba(255, 60, 60, 0.8)",
-                "xMin": 0, "xMax": len(labels)-1
+                "xMin": 0, "xMax": max_x
             }
 
         chart_config = {
             "type": "candlestick",
             "data": {
-                "labels": labels,
                 "datasets": [{
                     "label": symbol,
                     "data": data,
@@ -125,7 +121,7 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
             },
             "options": {
                 "scales": {
-                    "x": {"display": False},
+                    "x": {"type": "linear", "offset": True, "display": False},
                     "y": {"position": "right", "grid": {"color": "#2a2e39"}, "ticks": {"color": "#fff"}}
                 },
                 "plugins": {
@@ -154,9 +150,9 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
 @app.route('/')
 def home():
     html = f"""
-    <html><head><title>cripto_adda V31</title><meta http-equiv="refresh" content="30">
+    <html><head><title>cripto_adda V32</title><meta http-equiv="refresh" content="30">
     <style>body{{background-color:#12161e;color:#e0e0e0;font-family:sans-serif;padding:20px;}}.container{{max-width:900px;margin:auto;}}.card{{background-color:#1a1e29;padding:15px;border-radius:8px;margin-bottom:15px;border:1px solid #2a2e39;}}.buy{{border-left:5px solid #00c864;}}.sell{{border-left:5px solid #ff3c3c;}}table{{width:100%;border-collapse:collapse;margin-top:10px;}}th,td{{text-align:left;padding:8px;border-bottom:1px solid #2a2e39;}}</style></head>
-    <body><div class="container"><h1>🤖 cripto_adda V31 (Real Charts)</h1>
+    <body><div class="container"><h1>🤖 cripto_adda V32</h1>
     <p>Status: Running 24/7 | TF: {SCAN_TIMEFRAME} | Watchlist: {", ".join(watchlist) if watchlist else "All Coins"}</p><h2>📈 Active Trades</h2>
     """
     if not active_trades: html += "<div class='card'>No active trades. Scanning...</div>"
@@ -452,7 +448,7 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}],
                                 [{"text": "🗑️ Clear Watchlist", "callback_data": "/clearwatch"}]
                             ]}
-                            send_telegram(f"👋 *Welcome to cripto_adda V31!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome to cripto_adda V32!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
 
                         # -------- INDIAN MARKET FEATURES --------
                         elif text == "/scanindia":
