@@ -59,17 +59,26 @@ def get_journal():
     except: pass
     return []
 
-# ---------------- CHART GENERATOR ----------------
+# ---------------- CHART GENERATOR (FIXED) ----------------
 def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
     try:
         df_chart = df.tail(30)
-        data = []
-        for _, row in df_chart.iterrows():
-            data.append({"o": float(row['open']), "h": float(row['high']), "l": float(row['low']), "c": float(row['close'])})
+        # Use Line chart instead of Candlestick for reliable rendering
+        data_points = [float(row['close']) for _, row in df_chart.iterrows()]
+        labels = [str(i) for i in range(len(data_points))]
             
         chart_config = {
-            "type": "candlestick",
-            "data": {"datasets": [{"data": data, "color": {"up": "#00c864", "down": "#ff3c3c", "unchanged": "#999999"}}]},
+            "type": "line",
+            "data": {
+                "labels": labels,
+                "datasets": [{
+                    "data": data_points,
+                    "borderColor": "#ffffff", # White line for price
+                    "borderWidth": 2,
+                    "fill": False,
+                    "tension": 0.1
+                }]
+            },
             "options": {
                 "scales": {"x": {"display": False}, "y": {"position": "right", "grid": {"color": "#2a2e39"}, "ticks": {"color": "#fff"}}},
                 "plugins": {"legend": {"display": False}, "annotation": {"annotations": {
@@ -91,9 +100,9 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
 @app.route('/')
 def home():
     html = f"""
-    <html><head><title>cripto_adda V27</title><meta http-equiv="refresh" content="30">
+    <html><head><title>cripto_adda V28</title><meta http-equiv="refresh" content="30">
     <style>body{{background-color:#12161e;color:#e0e0e0;font-family:sans-serif;padding:20px;}}.container{{max-width:900px;margin:auto;}}.card{{background-color:#1a1e29;padding:15px;border-radius:8px;margin-bottom:15px;border:1px solid #2a2e39;}}.buy{{border-left:5px solid #00c864;}}.sell{{border-left:5px solid #ff3c3c;}}table{{width:100%;border-collapse:collapse;margin-top:10px;}}th,td{{text-align:left;padding:8px;border-bottom:1px solid #2a2e39;}}</style></head>
-    <body><div class="container"><h1>🤖 cripto_adda V27</h1>
+    <body><div class="container"><h1>🤖 cripto_adda V28</h1>
     <p>Status: Running 24/7 | TF: {SCAN_TIMEFRAME} | Watchlist: {", ".join(watchlist) if watchlist else "All Coins"}</p><h2>📈 Active Trades</h2>
     """
     if not active_trades: html += "<div class='card'>No active trades. Scanning...</div>"
@@ -331,7 +340,7 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}],
                                 [{"text": "🗑️ Clear Watchlist", "callback_data": "/clearwatch"}]
                             ]}
-                            send_telegram(f"👋 *Welcome to cripto_adda V27!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome to cripto_adda V28!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
 
                         # -------- HELP GUIDES --------
                         elif text == "help_search": send_telegram("🔍 *Search Command:*\nType: `/search BTC`")
