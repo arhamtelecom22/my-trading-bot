@@ -81,16 +81,14 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
         if len(data) == 0: return None
         max_x = len(data) - 1
 
-        # Setup Annotations (Lines and Boxes)
         annotations = {
             "entryLine": {
                 "type": "line", "yMin": entry, "yMax": entry, 
-                "borderColor": "#4a9eff", "borderWidth": 3, # Bold Entry Line
-                "borderDash": [0, 0] # Solid Line
+                "borderColor": "#4a9eff", "borderWidth": 3, 
+                "borderDash": [0, 0] 
             }
         }
 
-        # Light transparent boxes so candles are visible
         if signal == "BUY":
             annotations['profitBox'] = {
                 "type": "box", "yMin": entry, "yMax": tp1,
@@ -147,9 +145,9 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
 @app.route('/')
 def home():
     html = f"""
-    <html><head><title>cripto_adda V34</title><meta http-equiv="refresh" content="30">
+    <html><head><title>cripto_adda V35</title><meta http-equiv="refresh" content="30">
     <style>body{{background-color:#12161e;color:#e0e0e0;font-family:sans-serif;padding:20px;}}.container{{max-width:900px;margin:auto;}}.card{{background-color:#1a1e29;padding:15px;border-radius:8px;margin-bottom:15px;border:1px solid #2a2e39;}}.buy{{border-left:5px solid #00c864;}}.sell{{border-left:5px solid #ff3c3c;}}table{{width:100%;border-collapse:collapse;margin-top:10px;}}th,td{{text-align:left;padding:8px;border-bottom:1px solid #2a2e39;}}</style></head>
-    <body><div class="container"><h1>🤖 cripto_adda V34</h1>
+    <body><div class="container"><h1>🤖 cripto_adda V35</h1>
     <p>Status: Running 24/7 | TF: {SCAN_TIMEFRAME} | Watchlist: {", ".join(watchlist) if watchlist else "All Coins"}</p><h2>📈 Active Trades</h2>
     """
     if not active_trades: html += "<div class='card'>No active trades. Scanning...</div>"
@@ -389,11 +387,13 @@ def run_manual_scan(tf):
                             f"TP3: {fmt(tp3)}\n\n"
                             f"#{tf.upper()}TRADE"
                         )
-                        # Direct App Link in the button
-                        dcx_link = f"https://coindcx.com/trade/{clean_sym}"
+                        
+                        # DIRECT APP LINK
+                        dcx_link = f"coindcx://trade/{clean_sym}" 
+                        
                         markup = {"inline_keyboard": [
                             [{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], 
-                            [{"text": "📈 Open in CoinDCX", "url": dcx_link}]
+                            [{"text": "📈 Open in CoinDCX App", "url": dcx_link}]
                         ]}
                         
                         chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1, tp2, tp3)
@@ -450,7 +450,7 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}],
                                 [{"text": "🗑️ Clear Watchlist", "callback_data": "/clearwatch"}]
                             ]}
-                            send_telegram(f"👋 *Welcome to cripto_adda V34!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome to cripto_adda V35!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
 
                         # -------- INDIAN MARKET FEATURES --------
                         elif text == "/scanindia":
@@ -810,11 +810,13 @@ def scan_market():
                             f"TP3: {fmt(tp3)}\n\n"
                             f"#{SCAN_TIMEFRAME.upper()}TRADE"
                         )
-                        # Direct App Link in the button
-                        dcx_link = f"https://coindcx.com/trade/{clean_sym}"
+                        
+                        # DIRECT APP LINK
+                        dcx_link = f"coindcx://trade/{clean_sym}" 
+                        
                         markup = {"inline_keyboard": [
                             [{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], 
-                            [{"text": "📈 Open in CoinDCX", "url": dcx_link}]
+                            [{"text": "📈 Open in CoinDCX App", "url": dcx_link}]
                         ]}
                         
                         chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1, tp2, tp3)
