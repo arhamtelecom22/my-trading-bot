@@ -17,7 +17,7 @@ active_trades = {}
 price_alerts = {}
 last_signal_time = {}
 watchlist = set()
-SCAN_TIMEFRAME = "15m"
+SCAN_TIMEFRAME = "1h" # Changed to 1h for SWING trading
 
 # ---------------- SMART PRICE FORMATTER ----------------
 def fmt(p):
@@ -69,7 +69,7 @@ def home():
     </head>
     <body>
         <div class="container">
-            <h1>🤖 cripto_adda Bot</h1>
+            <h1>🤖 cripto_adda Swing Bot</h1>
             <p>Status: <span class="status">● Running 24/7</span> | Scan TF: """ + SCAN_TIMEFRAME + """ | Watchlist: """ + (", ".join(watchlist) if watchlist else "All Coins") + """</p>
             <h2>📈 Active Trades</h2>
     """
@@ -99,10 +99,19 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
+# ---------------- TELEGRAM HELPERS ----------------
 def send_telegram(text, reply_markup=None):
     if not TG_TOKEN: return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     payload = {"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
+    if reply_markup: payload["reply_markup"] = reply_markup
+    try: requests.post(url, json=payload)
+    except: pass
+
+def send_telegram_photo(photo_url, caption, reply_markup=None):
+    if not TG_TOKEN: return
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
+    payload = {"chat_id": TG_CHAT_ID, "photo": photo_url, "caption": caption, "parse_mode": "Markdown"}
     if reply_markup: payload["reply_markup"] = reply_markup
     try: requests.post(url, json=payload)
     except: pass
@@ -256,17 +265,16 @@ def run_backtest(coin, tf):
         df = calculate_indicators(df)
         
         wins, losses = 0, 0
-        for i in range(30, len(df)-10): # Start from 30 to get recent high/low
+        for i in range(30, len(df)-10):
             row, prev = df.iloc[i], df.iloc[i-1]
             
-            # Liquidity Sweep Logic for Backtest
             recent_low = df['low'].iloc[i-30:i].min()
             recent_high = df['high'].iloc[i-30:i].max()
             
             sweep_low = (row['low'] < recent_low) and (row['close'] > recent_low)
             sweep_high = (row['high'] > recent_high) and (row['close'] < recent_high)
             
-            vol_spike = row['volume'] > (df['volume'].iloc[i-20:i].mean() * 2.0)
+            vol_spike = row['volume'] > (df['volume'].iloc[i-20:i].mean() * 1.5)
             
             if row['adx'] > 25 and vol_spike:
                 if row['close'] > row['ema200'] and sweep_low and row['close'] > row['open'] and row['close'] > row['vwap'] and row['rsi'] > 50:
@@ -277,15 +285,15 @@ def run_backtest(coin, tf):
                     signal = None
                     
                 if signal:
-                    entry, risk = row['close'], row['atr'] * 2.5
+                    entry, risk = row['close'], row['atr'] * 3.0 # Swing Risk
                     outcome = "OPEN"
-                    for j in range(i+1, min(i+11, len(df))):
+                    for j in range(i+1, min(i+15, len(df))):
                         if signal == "BUY":
                             if df.iloc[j]['low'] <= entry - risk: outcome = "LOSS"; break
-                            if df.iloc[j]['high'] >= entry + (risk * 1.5): outcome = "WIN"; break
+                            if df.iloc[j]['high'] >= entry + (risk * 2.0): outcome = "WIN"; break
                         else:
                             if df.iloc[j]['high'] >= entry + risk: outcome = "LOSS"; break
-                            if df.iloc[j]['low'] <= entry - (risk * 1.5): outcome = "WIN"; break
+                            if df.iloc[j]['low'] <= entry - (risk * 2.0): outcome = "WIN"; break
                     if outcome == "WIN": wins += 1
                     elif outcome == "LOSS": losses += 1
         total = wins + losses
@@ -308,7 +316,6 @@ def telegram_commands():
                     chat_id = update.get("message", {}).get("chat", {}).get("id")
                     
                     if str(chat_id) == str(TG_CHAT_ID):
-                        # -------- ADVANCED MENU --------
                         if text in ["/start", "/menu"]:
                             markup = {"inline_keyboard": [
                                 [{"text": "🌐 Web Dashboard", "url": "https://my-trading-bot-9se1.onrender.com"}],
@@ -318,17 +325,15 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "📝 Backtest", "callback_data": "help_backtest"}],
                                 [{"text": "⚙️ Scan TF", "callback_data": "help_scan"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}]
                             ]}
-                            send_telegram(f"👋 *Welcome to cripto_adda!*\nTF: *{SCAN_TIMEFRAME}* | Watch: *{len(watchlist)}*\n\nSelect an option below:", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome to cripto_adda Swing!*\nTF: *{SCAN_TIMEFRAME}* | Watch: *{len(watchlist)}*\n\nSelect an option below:", reply_markup=markup)
 
-                        # -------- BUTTON HELP MENUS --------
-                        elif text == "help_search": send_telegram("🔍 *Search Command:*\nType: `/search BTC`\nExample: `/search ETH`")
-                        elif text == "help_zones": send_telegram("📉 *Zones Command:*\nType: `/zones BTC`\nExample: `/zones SOL`")
-                        elif text == "help_alert": send_telegram("🔔 *Alert Command:*\nType: `/alert BTC 65000`\nExample: `/alert ETH 3000`")
-                        elif text == "help_backtest": send_telegram("📝 *Backtest Command:*\nType: `/backtest BTC 15m`\nExample: `/backtest SOL 1h`")
-                        elif text == "help_scan": send_telegram("⚙️ *Scan Command:*\nType: `/scan 15m` or `/scan 1h`")
-                        elif text == "help_watch": send_telegram("⭐ *Watchlist Command:*\nAdd: `/watch BTC`\nRemove All: `/clearwatch`")
+                        elif text == "help_search": send_telegram("🔍 *Search Command:*\nType: `/search BTC`")
+                        elif text == "help_zones": send_telegram("📉 *Zones Command:*\nType: `/zones BTC`")
+                        elif text == "help_alert": send_telegram("🔔 *Alert Command:*\nType: `/alert BTC 65000`")
+                        elif text == "help_backtest": send_telegram("📝 *Backtest Command:*\nType: `/backtest BTC 1h`")
+                        elif text == "help_scan": send_telegram("⚙️ *Scan Command:*\nType: `/scan 1h` or `/scan 4h`")
+                        elif text == "help_watch": send_telegram("⭐ *Watchlist Command:*\nAdd: `/watch BTC`\nClear: `/clearwatch`")
 
-                        # -------- COMMANDS --------
                         elif text == "/status":
                             send_telegram(f"🤖 *cripto_adda Running*\nTF: {SCAN_TIMEFRAME}\nTrades: {len(active_trades)}\nAlerts: {len(price_alerts)}")
                         
@@ -439,13 +444,13 @@ def telegram_commands():
                             parts = text.split()
                             if len(parts) >= 2:
                                 target_coin = parts[1].upper()
-                                tf = parts[2] if len(parts) >= 3 else "15m"
+                                tf = parts[2] if len(parts) >= 3 else "1h"
                                 Thread(target=run_backtest, args=(target_coin, tf)).start()
-                            else: send_telegram("⚠️ Use: `/backtest BTC` or `/backtest BTC 1h`")
+                            else: send_telegram("⚠️ Use: `/backtest BTC` or `/backtest BTC 4h`")
 
                         elif text.startswith("/scan"):
                             parts = text.split()
-                            if len(parts) > 1 and parts[1] in ['1m','5m','15m','1h','4h']:
+                            if len(parts) > 1 and parts[1] in ['15m','1h','4h']:
                                 SCAN_TIMEFRAME = parts[1]
                                 send_telegram(f"✅ Scanner TF: *{SCAN_TIMEFRAME}*")
                             else: send_telegram("⚠️ Use: `/scan 1h`")
@@ -486,6 +491,17 @@ def calculate_indicators(df):
     df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
     return df
 
+# ---------------- IMAGE GENERATOR (VIA URL) ----------------
+def get_chart_url(closes):
+    try:
+        # Last 20 closes ko format karo
+        data_str = ",".join([fmt(c) for c in closes[-20:]])
+        # QuickChart API URL
+        chart_url = f"https://quickchart.io/chart?c={{type:'sparkline',data:{{datasets:[{{data:[{data_str}]}}]}}}}"
+        return chart_url
+    except:
+        return "https://quickchart.io/chart?c={type:'sparkline',data:{datasets:[{data:[10,20,15,30,25,40]}]}}" # Fallback
+
 # ---------------- SCANNER ----------------
 def scan_market():
     global SCAN_TIMEFRAME
@@ -520,31 +536,26 @@ def scan_market():
                 current_price = last['close']
                 ema200, rsi, atr, adx, vwap = last['ema200'], last['rsi'], last['atr'], last['adx'], last['vwap']
                 
-                # Ultra Strong Volume & ADX
-                vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 2.0)
+                vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.5)
                 
-                # --- LIQUIDITY SWEEP LOGIC ---
+                # --- SWING LIQUIDITY SWEEP LOGIC ---
                 recent_low = df['low'].iloc[-30:-1].min()
                 recent_high = df['high'].iloc[-30:-1].max()
                 
-                # Sweep Low: Wick went below support, but closed above it (Bullish Rejection)
                 sweep_low = (last['low'] < recent_low) and (current_price > recent_low)
-                # Sweep High: Wick went above resistance, but closed below it (Bearish Rejection)
                 sweep_high = (last['high'] > recent_high) and (current_price < recent_high)
 
                 signal = None
                 if adx > 25 and vol_spike:
-                    # BUY: Sweep Low + Close > Open (Green Candle) + Trend Up + VWAP + RSI
                     if current_price > ema200 and sweep_low and current_price > last['open'] and current_price > vwap and rsi > 50:
                         if check_order_book(c_sym): signal = "BUY"
-                    # SELL: Sweep High + Close < Open (Red Candle) + Trend Down + VWAP + RSI
                     elif current_price < ema200 and sweep_high and current_price < last['open'] and current_price < vwap and rsi < 50:
                         if check_order_book(c_sym): signal = "SELL"
 
                 if signal:
-                    entry, risk = current_price, atr * 2.5 
-                    if signal == "BUY": sl, tp1, tp2, tp3 = entry - risk, entry + (risk * 1.5), entry + (risk * 3.0), entry + (risk * 4.5)
-                    else: sl, tp1, tp2, tp3 = entry + risk, entry - (risk * 1.5), entry - (risk * 3.0), entry - (risk * 4.5)
+                    entry, risk = current_price, atr * 3.0 # Swing Risk (Bada SL)
+                    if signal == "BUY": sl, tp1, tp2, tp3 = entry - risk, entry + (risk * 2.0), entry + (risk * 3.5), entry + (risk * 5.0) # Bade Targets
+                    else: sl, tp1, tp2, tp3 = entry + risk, entry - (risk * 2.0), entry - (risk * 3.5), entry - (risk * 5.0)
 
                     active_trades[sym] = {'type': signal, 'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'status': 'OPEN'}
                     last_signal_time[sym] = time.time() 
@@ -553,14 +564,19 @@ def scan_market():
                     clean_sym = sym.replace("B-", "").replace("I-", "").replace("_", "")
                     dcx_link = f"https://coindcx.com/trade/{clean_sym}"
                     
-                    text = (f"🎯 *cripto_adda {signal} (SWEEP)*\n\n🪙 *Coin:* {clean_sym}\n"
+                    text = (f"🎯 *cripto_adda SWING {signal}*\n\n🪙 *Coin:* {clean_sym}\n"
                             f"💰 *Entry:* {fmt(entry)}\n🛑 *SL:* {fmt(sl)}\n"
                             f"🎯 *TP1:* {fmt(tp1)}\n🎯 *TP2:* {fmt(tp2)}\n🎯 *TP3:* {fmt(tp3)}\n"
                             f"📊 *ADX:* {adx:.1f} | *VWAP:* ✅ | *RSI:* {rsi:.1f}\n"
-                            f"⏱️ *TF:* {SCAN_TIMEFRAME}")
+                            f"⏱️ *TF:* {SCAN_TIMEFRAME} (Swing)")
                     
                     markup = {"inline_keyboard": [[{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], [{"text": "🌐 Open Web Chart", "url": dcx_link}]]}
-                    send_telegram(text, reply_markup=markup)
+                    
+                    # Chart URL generate karo
+                    chart_img_url = get_chart_url(df['close'].tolist())
+                    
+                    # Photo send karo
+                    send_telegram_photo(chart_img_url, text, reply_markup=markup)
             except: pass
             time.sleep(0.5)
     except: pass
