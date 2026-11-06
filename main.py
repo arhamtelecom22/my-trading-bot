@@ -59,22 +59,24 @@ def get_journal():
     except: pass
     return []
 
-# ---------------- PERFECT CANDLESTICK CHART GENERATOR ----------------
+# ---------------- PERFECT CHART GENERATOR ----------------
 def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
     try:
         df_chart = df.tail(30).copy()
         data = []
+        labels = []
+        
         for i, row in enumerate(df_chart.itertuples()):
-            # Skip any NaN values
             if pd.isna(row.open) or pd.isna(row.high) or pd.isna(row.low) or pd.isna(row.close):
                 continue
             data.append({
-                "x": i,
+                "x": str(i),
                 "o": float(row.open),
                 "h": float(row.high),
                 "l": float(row.low),
                 "c": float(row.close)
             })
+            labels.append(str(i))
         
         if len(data) == 0: return None
         max_x = len(data) - 1
@@ -83,36 +85,39 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
         annotations = {
             "entryLine": {
                 "type": "line", "yMin": entry, "yMax": entry, 
-                "borderColor": "#4a9eff", "borderWidth": 2, "borderDash": [5, 5]
+                "borderColor": "#4a9eff", "borderWidth": 3, # Bold Entry Line
+                "borderDash": [0, 0] # Solid Line
             }
         }
 
+        # Light transparent boxes so candles are visible
         if signal == "BUY":
             annotations['profitBox'] = {
                 "type": "box", "yMin": entry, "yMax": tp1,
-                "backgroundColor": "rgba(0, 200, 100, 0.2)", "borderColor": "rgba(0, 200, 100, 0.8)",
+                "backgroundColor": "rgba(0, 200, 100, 0.05)", "borderColor": "rgba(0, 200, 100, 0.4)",
                 "xMin": 0, "xMax": max_x
             }
             annotations['lossBox'] = {
                 "type": "box", "yMin": sl, "yMax": entry,
-                "backgroundColor": "rgba(255, 60, 60, 0.2)", "borderColor": "rgba(255, 60, 60, 0.8)",
+                "backgroundColor": "rgba(255, 60, 60, 0.05)", "borderColor": "rgba(255, 60, 60, 0.4)",
                 "xMin": 0, "xMax": max_x
             }
         elif signal == "SELL":
             annotations['profitBox'] = {
                 "type": "box", "yMin": tp1, "yMax": entry,
-                "backgroundColor": "rgba(0, 200, 100, 0.2)", "borderColor": "rgba(0, 200, 100, 0.8)",
+                "backgroundColor": "rgba(0, 200, 100, 0.05)", "borderColor": "rgba(0, 200, 100, 0.4)",
                 "xMin": 0, "xMax": max_x
             }
             annotations['lossBox'] = {
                 "type": "box", "yMin": entry, "yMax": sl,
-                "backgroundColor": "rgba(255, 60, 60, 0.2)", "borderColor": "rgba(255, 60, 60, 0.8)",
+                "backgroundColor": "rgba(255, 60, 60, 0.05)", "borderColor": "rgba(255, 60, 60, 0.4)",
                 "xMin": 0, "xMax": max_x
             }
 
         chart_config = {
             "type": "candlestick",
             "data": {
+                "labels": labels,
                 "datasets": [{
                     "label": symbol,
                     "data": data,
@@ -121,7 +126,7 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
             },
             "options": {
                 "scales": {
-                    "x": {"type": "linear", "offset": True, "display": False},
+                    "x": {"type": "category", "display": False},
                     "y": {"position": "right", "grid": {"color": "#2a2e39"}, "ticks": {"color": "#fff"}}
                 },
                 "plugins": {
@@ -131,17 +136,9 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
             }
         }
         
-        payload = {
-            "chart": chart_config, 
-            "width": 800, 
-            "height": 450, 
-            "backgroundColor": "#131722", 
-            "version": "3"
-        }
-        
+        payload = {"chart": chart_config, "width": 800, "height": 450, "backgroundColor": "#131722", "version": "3"}
         res = requests.post("https://quickchart.io/chart", json=payload, timeout=15)
-        if res.status_code == 200: 
-            return res.content
+        if res.status_code == 200: return res.content
     except Exception as e:
         print("Chart Error:", e)
     return None
@@ -150,9 +147,9 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
 @app.route('/')
 def home():
     html = f"""
-    <html><head><title>cripto_adda V32</title><meta http-equiv="refresh" content="30">
+    <html><head><title>cripto_adda V34</title><meta http-equiv="refresh" content="30">
     <style>body{{background-color:#12161e;color:#e0e0e0;font-family:sans-serif;padding:20px;}}.container{{max-width:900px;margin:auto;}}.card{{background-color:#1a1e29;padding:15px;border-radius:8px;margin-bottom:15px;border:1px solid #2a2e39;}}.buy{{border-left:5px solid #00c864;}}.sell{{border-left:5px solid #ff3c3c;}}table{{width:100%;border-collapse:collapse;margin-top:10px;}}th,td{{text-align:left;padding:8px;border-bottom:1px solid #2a2e39;}}</style></head>
-    <body><div class="container"><h1>🤖 cripto_adda V32</h1>
+    <body><div class="container"><h1>🤖 cripto_adda V34</h1>
     <p>Status: Running 24/7 | TF: {SCAN_TIMEFRAME} | Watchlist: {", ".join(watchlist) if watchlist else "All Coins"}</p><h2>📈 Active Trades</h2>
     """
     if not active_trades: html += "<div class='card'>No active trades. Scanning...</div>"
@@ -392,7 +389,12 @@ def run_manual_scan(tf):
                             f"TP3: {fmt(tp3)}\n\n"
                             f"#{tf.upper()}TRADE"
                         )
-                        markup = {"inline_keyboard": [[{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], [{"text": "🌐 Chart", "url": f"https://coindcx.com/trade/{clean_sym}"}]]}
+                        # Direct App Link in the button
+                        dcx_link = f"https://coindcx.com/trade/{clean_sym}"
+                        markup = {"inline_keyboard": [
+                            [{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], 
+                            [{"text": "📈 Open in CoinDCX", "url": dcx_link}]
+                        ]}
                         
                         chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1, tp2, tp3)
                         if chart_img: send_telegram_photo(chart_img, text, reply_markup=markup)
@@ -448,7 +450,7 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}],
                                 [{"text": "🗑️ Clear Watchlist", "callback_data": "/clearwatch"}]
                             ]}
-                            send_telegram(f"👋 *Welcome to cripto_adda V32!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome to cripto_adda V34!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
 
                         # -------- INDIAN MARKET FEATURES --------
                         elif text == "/scanindia":
@@ -808,7 +810,12 @@ def scan_market():
                             f"TP3: {fmt(tp3)}\n\n"
                             f"#{SCAN_TIMEFRAME.upper()}TRADE"
                         )
-                        markup = {"inline_keyboard": [[{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], [{"text": "🌐 Chart", "url": f"https://coindcx.com/trade/{clean_sym}"}]]}
+                        # Direct App Link in the button
+                        dcx_link = f"https://coindcx.com/trade/{clean_sym}"
+                        markup = {"inline_keyboard": [
+                            [{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], 
+                            [{"text": "📈 Open in CoinDCX", "url": dcx_link}]
+                        ]}
                         
                         chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1, tp2, tp3)
                         if chart_img: send_telegram_photo(chart_img, text, reply_markup=markup)
