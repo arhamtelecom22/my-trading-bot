@@ -59,40 +59,104 @@ def get_journal():
     except: pass
     return []
 
-# ---------------- CHART GENERATOR ----------------
+# ---------------- REAL CANDLESTICK CHART GENERATOR ----------------
 def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
     try:
-        df_chart = df.tail(30)
-        data_points = [float(row['close']) for _, row in df_chart.iterrows()]
-        labels = [str(i) for i in range(len(data_points))]
-            
+        df_chart = df.tail(30).copy()
+        
+        # Prepare Candlestick Data
+        data = []
+        for _, row in df_chart.iterrows():
+            data.append({
+                "o": float(row['open']),
+                "h": float(row['high']),
+                "l": float(row['low']),
+                "c": float(row['close'])
+            })
+        
+        labels = [str(i) for i in range(len(data))]
+
+        # Setup Long/Short Boxes (Annotations)
+        annotations = {}
+        
+        # Entry Line
+        annotations['entryLine'] = {
+            "type": "line", "yMin": entry, "yMax": entry, 
+            "borderColor": "#4a9eff", "borderWidth": 2, "borderDash": [5, 5],
+            "label": {"display": True, "content": "Entry", "position": "start", "color": "#4a9eff", "backgroundColor": "transparent"}
+        }
+
+        if signal == "BUY":
+            # Profit Zone (Green)
+            annotations['profitBox'] = {
+                "type": "box", "yMin": entry, "yMax": tp1,
+                "backgroundColor": "rgba(0, 200, 100, 0.2)", "borderColor": "rgba(0, 200, 100, 0.8)",
+                "xMin": 0, "xMax": len(labels)-1
+            }
+            # Loss Zone (Red)
+            annotations['lossBox'] = {
+                "type": "box", "yMin": sl, "yMax": entry,
+                "backgroundColor": "rgba(255, 60, 60, 0.2)", "borderColor": "rgba(255, 60, 60, 0.8)",
+                "xMin": 0, "xMax": len(labels)-1
+            }
+        elif signal == "SELL":
+            # Profit Zone (Green)
+            annotations['profitBox'] = {
+                "type": "box", "yMin": tp1, "yMax": entry,
+                "backgroundColor": "rgba(0, 200, 100, 0.2)", "borderColor": "rgba(0, 200, 100, 0.8)",
+                "xMin": 0, "xMax": len(labels)-1
+            }
+            # Loss Zone (Red)
+            annotations['lossBox'] = {
+                "type": "box", "yMin": entry, "yMax": sl,
+                "backgroundColor": "rgba(255, 60, 60, 0.2)", "borderColor": "rgba(255, 60, 60, 0.8)",
+                "xMin": 0, "xMax": len(labels)-1
+            }
+
         chart_config = {
-            "type": "line",
-            "data": {"labels": labels, "datasets": [{"data": data_points, "borderColor": "#ffffff", "borderWidth": 2, "fill": False, "tension": 0.1}]},
+            "type": "candlestick",
+            "data": {
+                "labels": labels,
+                "datasets": [{
+                    "label": symbol,
+                    "data": data,
+                    "color": {"up": "#00c864", "down": "#ff3c3c", "unchanged": "#999999"}
+                }]
+            },
             "options": {
-                "scales": {"x": {"display": False}, "y": {"position": "right", "grid": {"color": "#2a2e39"}, "ticks": {"color": "#fff"}}},
-                "plugins": {"legend": {"display": False}, "annotation": {"annotations": {
-                    "entryLine": {"type": "line", "yMin": entry, "yMax": entry, "borderColor": "#4a9eff", "borderWidth": 2},
-                    "slLine": {"type": "line", "yMin": sl, "yMax": sl, "borderColor": "#ff3c3c", "borderWidth": 2},
-                    "tp1Line": {"type": "line", "yMin": tp1, "yMax": tp1, "borderColor": "#00c864", "borderWidth": 2},
-                    "tp2Line": {"type": "line", "yMin": tp2, "yMax": tp2, "borderColor": "#00c864", "borderWidth": 1.5},
-                    "tp3Line": {"type": "line", "yMin": tp3, "yMax": tp3, "borderColor": "#00c864", "borderWidth": 1}
-                }}}
+                "scales": {
+                    "x": {"display": False},
+                    "y": {"position": "right", "grid": {"color": "#2a2e39"}, "ticks": {"color": "#fff"}}
+                },
+                "plugins": {
+                    "legend": {"display": False},
+                    "annotation": {"annotations": annotations}
+                }
             }
         }
-        payload = {"chart": chart_config, "width": 800, "height": 450, "backgroundColor": "#131722", "version": "3"}
+        
+        payload = {
+            "chart": chart_config, 
+            "width": 800, 
+            "height": 450, 
+            "backgroundColor": "#131722", 
+            "version": "3"
+        }
+        
         res = requests.post("https://quickchart.io/chart", json=payload, timeout=15)
-        if res.status_code == 200: return res.content
-    except: pass
+        if res.status_code == 200: 
+            return res.content
+    except Exception as e:
+        print("Chart Error:", e)
     return None
 
 # ---------------- WEB DASHBOARD ----------------
 @app.route('/')
 def home():
     html = f"""
-    <html><head><title>cripto_adda V30</title><meta http-equiv="refresh" content="30">
+    <html><head><title>cripto_adda V31</title><meta http-equiv="refresh" content="30">
     <style>body{{background-color:#12161e;color:#e0e0e0;font-family:sans-serif;padding:20px;}}.container{{max-width:900px;margin:auto;}}.card{{background-color:#1a1e29;padding:15px;border-radius:8px;margin-bottom:15px;border:1px solid #2a2e39;}}.buy{{border-left:5px solid #00c864;}}.sell{{border-left:5px solid #ff3c3c;}}table{{width:100%;border-collapse:collapse;margin-top:10px;}}th,td{{text-align:left;padding:8px;border-bottom:1px solid #2a2e39;}}</style></head>
-    <body><div class="container"><h1>🤖 cripto_adda V30 (India + Crypto)</h1>
+    <body><div class="container"><h1>🤖 cripto_adda V31 (Real Charts)</h1>
     <p>Status: Running 24/7 | TF: {SCAN_TIMEFRAME} | Watchlist: {", ".join(watchlist) if watchlist else "All Coins"}</p><h2>📈 Active Trades</h2>
     """
     if not active_trades: html += "<div class='card'>No active trades. Scanning...</div>"
@@ -169,7 +233,6 @@ def scan_indian_market():
         df = calculate_indicators(df)
         last, prev = df.iloc[-1], df.iloc[-2]
         
-        # Simple Breakout + Trend Logic for Stocks
         signal = None
         if last['close'] > last['ema200'] and last['rsi'] > 60 and last['close'] > prev['close']:
             signal = "BUY"
@@ -266,7 +329,7 @@ def monitor_trades():
         except: pass
         time.sleep(15)
 
-# ---------------- MANUAL SIGNAL SCANNER (CRYPTO) ----------------
+# ---------------- MANUAL SIGNAL SCANNER ----------------
 def run_manual_scan(tf):
     global MANUAL_SCAN_ACTIVE
     MANUAL_SCAN_ACTIVE = True
@@ -389,7 +452,7 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}],
                                 [{"text": "🗑️ Clear Watchlist", "callback_data": "/clearwatch"}]
                             ]}
-                            send_telegram(f"👋 *Welcome to cripto_adda V30!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome to cripto_adda V31!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
 
                         # -------- INDIAN MARKET FEATURES --------
                         elif text == "/scanindia":
@@ -428,7 +491,7 @@ def telegram_commands():
 
                         elif text == "/cryptoinr":
                             send_telegram("⏳ Scanning Crypto INR pairs...")
-                            run_manual_scan("15m") # Using manual scan for INR
+                            run_manual_scan("15m") 
 
                         # -------- HELP GUIDES --------
                         elif text == "help_search": send_telegram("🔍 *Search Command:*\nType: `/search BTC`")
