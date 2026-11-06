@@ -17,9 +17,8 @@ active_trades = {}
 price_alerts = {}
 last_signal_time = {}
 watchlist = set()
-SCAN_TIMEFRAME = "1h" # Changed to 1h for SWING trading
+SCAN_TIMEFRAME = "1h" # Swing Trading Default
 
-# ---------------- SMART PRICE FORMATTER ----------------
 def fmt(p):
     try:
         p = float(p)
@@ -27,10 +26,8 @@ def fmt(p):
         if p >= 10: return f"{p:.3f}"
         if p >= 1: return f"{p:.4f}"
         if p >= 0.01: return f"{p:.5f}"
-        if p >= 0.0001: return f"{p:.6f}"
-        return f"{p:.8f}"
-    except:
-        return str(p)
+        return f"{p:.6f}"
+    except: return str(p)
 
 # ---------------- PERMANENT MEMORY ----------------
 def load_active_trades():
@@ -46,6 +43,59 @@ def save_active_trades():
         with open("active_trades.json", "w") as f:
             json.dump(active_trades, f)
     except: pass
+
+# ---------------- CHART GENERATOR ----------------
+def generate_chart_image(df, symbol, signal, entry, sl, tp1):
+    try:
+        df_chart = df.tail(30) # Last 30 candles
+        data = []
+        for _, row in df_chart.iterrows():
+            data.append({
+                "o": float(row['open']),
+                "h": float(row['high']),
+                "l": float(row['low']),
+                "c": float(row['close'])
+            })
+            
+        chart_config = {
+            "type": "candlestick",
+            "data": {
+                "datasets": [{
+                    "data": data,
+                    "color": {"up": "#00c864", "down": "#ff3c3c", "unchanged": "#999999"}
+                }]
+            },
+            "options": {
+                "scales": {
+                    "x": {"display": False},
+                    "y": {"position": "right", "grid": {"color": "#2a2e39"}, "ticks": {"color": "#fff"}}
+                },
+                "plugins": {
+                    "legend": {"display": False},
+                    "annotation": {
+                        "annotations": {
+                            "entryLine": {"type": "line", "yMin": entry, "yMax": entry, "borderColor": "#4a9eff", "borderWidth": 2},
+                            "slLine": {"type": "line", "yMin": sl, "yMax": sl, "borderColor": "#ff3c3c", "borderWidth": 2},
+                            "tpLine": {"type": "line", "yMin": tp1, "yMax": tp1, "borderColor": "#00c864", "borderWidth": 2}
+                        }
+                    }
+                }
+            }
+        }
+        
+        payload = {
+            "chart": chart_config,
+            "width": 800,
+            "height": 450,
+            "backgroundColor": "#131722",
+            "version": "3"
+        }
+        res = requests.post("https://quickchart.io/chart", json=payload, timeout=15)
+        if res.status_code == 200:
+            return res.content
+    except Exception as e:
+        print("Chart Error:", e)
+    return None
 
 # ---------------- WEB DASHBOARD ----------------
 @app.route('/')
@@ -108,12 +158,15 @@ def send_telegram(text, reply_markup=None):
     try: requests.post(url, json=payload)
     except: pass
 
-def send_telegram_photo(photo_url, caption, reply_markup=None):
+def send_telegram_photo(photo_bytes, caption, reply_markup=None):
     if not TG_TOKEN: return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
-    payload = {"chat_id": TG_CHAT_ID, "photo": photo_url, "caption": caption, "parse_mode": "Markdown"}
-    if reply_markup: payload["reply_markup"] = reply_markup
-    try: requests.post(url, json=payload)
+    files = {'photo': ('chart.png', photo_bytes, 'image/png')}
+    data = {"chat_id": TG_CHAT_ID, "caption": caption, "parse_mode": "Markdown"}
+    if reply_markup:
+        data["reply_markup"] = json.dumps(reply_markup) # Must be string for multipart
+    try:
+        requests.post(url, files=files, data=data)
     except: pass
 
 headers = {'User-Agent': 'Mozilla/5.0'}
@@ -267,13 +320,11 @@ def run_backtest(coin, tf):
         wins, losses = 0, 0
         for i in range(30, len(df)-10):
             row, prev = df.iloc[i], df.iloc[i-1]
-            
             recent_low = df['low'].iloc[i-30:i].min()
             recent_high = df['high'].iloc[i-30:i].max()
             
             sweep_low = (row['low'] < recent_low) and (row['close'] > recent_low)
             sweep_high = (row['high'] > recent_high) and (row['close'] < recent_high)
-            
             vol_spike = row['volume'] > (df['volume'].iloc[i-20:i].mean() * 1.5)
             
             if row['adx'] > 25 and vol_spike:
@@ -285,7 +336,7 @@ def run_backtest(coin, tf):
                     signal = None
                     
                 if signal:
-                    entry, risk = row['close'], row['atr'] * 3.0 # Swing Risk
+                    entry, risk = row['close'], row['atr'] * 3.0
                     outcome = "OPEN"
                     for j in range(i+1, min(i+15, len(df))):
                         if signal == "BUY":
@@ -325,7 +376,7 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "📝 Backtest", "callback_data": "help_backtest"}],
                                 [{"text": "⚙️ Scan TF", "callback_data": "help_scan"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}]
                             ]}
-                            send_telegram(f"👋 *Welcome to cripto_adda Swing!*\nTF: *{SCAN_TIMEFRAME}* | Watch: *{len(watchlist)}*\n\nSelect an option below:", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome to cripto_adda!*\nTF: *{SCAN_TIMEFRAME}* | Watch: *{len(watchlist)}*\n\nSelect an option below:", reply_markup=markup)
 
                         elif text == "help_search": send_telegram("🔍 *Search Command:*\nType: `/search BTC`")
                         elif text == "help_zones": send_telegram("📉 *Zones Command:*\nType: `/zones BTC`")
@@ -491,17 +542,6 @@ def calculate_indicators(df):
     df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
     return df
 
-# ---------------- IMAGE GENERATOR (VIA URL) ----------------
-def get_chart_url(closes):
-    try:
-        # Last 20 closes ko format karo
-        data_str = ",".join([fmt(c) for c in closes[-20:]])
-        # QuickChart API URL
-        chart_url = f"https://quickchart.io/chart?c={{type:'sparkline',data:{{datasets:[{{data:[{data_str}]}}]}}}}"
-        return chart_url
-    except:
-        return "https://quickchart.io/chart?c={type:'sparkline',data:{datasets:[{data:[10,20,15,30,25,40]}]}}" # Fallback
-
 # ---------------- SCANNER ----------------
 def scan_market():
     global SCAN_TIMEFRAME
@@ -538,7 +578,6 @@ def scan_market():
                 
                 vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.5)
                 
-                # --- SWING LIQUIDITY SWEEP LOGIC ---
                 recent_low = df['low'].iloc[-30:-1].min()
                 recent_high = df['high'].iloc[-30:-1].max()
                 
@@ -553,8 +592,8 @@ def scan_market():
                         if check_order_book(c_sym): signal = "SELL"
 
                 if signal:
-                    entry, risk = current_price, atr * 3.0 # Swing Risk (Bada SL)
-                    if signal == "BUY": sl, tp1, tp2, tp3 = entry - risk, entry + (risk * 2.0), entry + (risk * 3.5), entry + (risk * 5.0) # Bade Targets
+                    entry, risk = current_price, atr * 3.0 
+                    if signal == "BUY": sl, tp1, tp2, tp3 = entry - risk, entry + (risk * 2.0), entry + (risk * 3.5), entry + (risk * 5.0)
                     else: sl, tp1, tp2, tp3 = entry + risk, entry - (risk * 2.0), entry - (risk * 3.5), entry - (risk * 5.0)
 
                     active_trades[sym] = {'type': signal, 'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'status': 'OPEN'}
@@ -564,19 +603,21 @@ def scan_market():
                     clean_sym = sym.replace("B-", "").replace("I-", "").replace("_", "")
                     dcx_link = f"https://coindcx.com/trade/{clean_sym}"
                     
-                    text = (f"🎯 *cripto_adda SWING {signal}*\n\n🪙 *Coin:* {clean_sym}\n"
-                            f"💰 *Entry:* {fmt(entry)}\n🛑 *SL:* {fmt(sl)}\n"
-                            f"🎯 *TP1:* {fmt(tp1)}\n🎯 *TP2:* {fmt(tp2)}\n🎯 *TP3:* {fmt(tp3)}\n"
-                            f"📊 *ADX:* {adx:.1f} | *VWAP:* ✅ | *RSI:* {rsi:.1f}\n"
-                            f"⏱️ *TF:* {SCAN_TIMEFRAME} (Swing)")
+                    # Message Format matching screenshot
+                    text = (
+                        f"#{clean_sym} {signal} FROM {fmt(entry)}\n\n"
+                        f"SL {fmt(sl)}\n\n"
+                        f"TARGET {fmt(tp1)}\n\n"
+                        f"#{SCAN_TIMEFRAME.upper()}TRADE"
+                    )
                     
                     markup = {"inline_keyboard": [[{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], [{"text": "🌐 Open Web Chart", "url": dcx_link}]]}
                     
-                    # Chart URL generate karo
-                    chart_img_url = get_chart_url(df['close'].tolist())
-                    
-                    # Photo send karo
-                    send_telegram_photo(chart_img_url, text, reply_markup=markup)
+                    chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1)
+                    if chart_img:
+                        send_telegram_photo(chart_img, text, reply_markup=markup)
+                    else:
+                        send_telegram(text, reply_markup=markup)
             except: pass
             time.sleep(0.5)
     except: pass
