@@ -59,7 +59,7 @@ def get_journal():
     except: pass
     return []
 
-# ---------------- PERFECT CHART GENERATOR ----------------
+# ---------------- CHART GENERATOR ----------------
 def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
     try:
         df_chart = df.tail(30).copy()
@@ -69,68 +69,29 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
         for i, row in enumerate(df_chart.itertuples()):
             if pd.isna(row.open) or pd.isna(row.high) or pd.isna(row.low) or pd.isna(row.close):
                 continue
-            data.append({
-                "x": str(i),
-                "o": float(row.open),
-                "h": float(row.high),
-                "l": float(row.low),
-                "c": float(row.close)
-            })
+            data.append({"x": str(i), "o": float(row.open), "h": float(row.high), "l": float(row.low), "c": float(row.close)})
             labels.append(str(i))
         
         if len(data) == 0: return None
         max_x = len(data) - 1
 
         annotations = {
-            "entryLine": {
-                "type": "line", "yMin": entry, "yMax": entry, 
-                "borderColor": "#4a9eff", "borderWidth": 3, 
-                "borderDash": [0, 0] 
-            }
+            "entryLine": {"type": "line", "yMin": entry, "yMax": entry, "borderColor": "#4a9eff", "borderWidth": 3, "borderDash": [0, 0]}
         }
 
         if signal == "BUY":
-            annotations['profitBox'] = {
-                "type": "box", "yMin": entry, "yMax": tp1,
-                "backgroundColor": "rgba(0, 200, 100, 0.05)", "borderColor": "rgba(0, 200, 100, 0.4)",
-                "xMin": 0, "xMax": max_x
-            }
-            annotations['lossBox'] = {
-                "type": "box", "yMin": sl, "yMax": entry,
-                "backgroundColor": "rgba(255, 60, 60, 0.05)", "borderColor": "rgba(255, 60, 60, 0.4)",
-                "xMin": 0, "xMax": max_x
-            }
+            annotations['profitBox'] = {"type": "box", "yMin": entry, "yMax": tp1, "backgroundColor": "rgba(0, 200, 100, 0.05)", "borderColor": "rgba(0, 200, 100, 0.4)", "xMin": 0, "xMax": max_x}
+            annotations['lossBox'] = {"type": "box", "yMin": sl, "yMax": entry, "backgroundColor": "rgba(255, 60, 60, 0.05)", "borderColor": "rgba(255, 60, 60, 0.4)", "xMin": 0, "xMax": max_x}
         elif signal == "SELL":
-            annotations['profitBox'] = {
-                "type": "box", "yMin": tp1, "yMax": entry,
-                "backgroundColor": "rgba(0, 200, 100, 0.05)", "borderColor": "rgba(0, 200, 100, 0.4)",
-                "xMin": 0, "xMax": max_x
-            }
-            annotations['lossBox'] = {
-                "type": "box", "yMin": entry, "yMax": sl,
-                "backgroundColor": "rgba(255, 60, 60, 0.05)", "borderColor": "rgba(255, 60, 60, 0.4)",
-                "xMin": 0, "xMax": max_x
-            }
+            annotations['profitBox'] = {"type": "box", "yMin": tp1, "yMax": entry, "backgroundColor": "rgba(0, 200, 100, 0.05)", "borderColor": "rgba(0, 200, 100, 0.4)", "xMin": 0, "xMax": max_x}
+            annotations['lossBox'] = {"type": "box", "yMin": entry, "yMax": sl, "backgroundColor": "rgba(255, 60, 60, 0.05)", "borderColor": "rgba(255, 60, 60, 0.4)", "xMin": 0, "xMax": max_x}
 
         chart_config = {
             "type": "candlestick",
-            "data": {
-                "labels": labels,
-                "datasets": [{
-                    "label": symbol,
-                    "data": data,
-                    "color": {"up": "#00c864", "down": "#ff3c3c", "unchanged": "#999999"}
-                }]
-            },
+            "data": {"labels": labels, "datasets": [{"label": symbol, "data": data, "color": {"up": "#00c864", "down": "#ff3c3c", "unchanged": "#999999"}}]},
             "options": {
-                "scales": {
-                    "x": {"type": "category", "display": False},
-                    "y": {"position": "right", "grid": {"color": "#2a2e39"}, "ticks": {"color": "#fff"}}
-                },
-                "plugins": {
-                    "legend": {"display": False},
-                    "annotation": {"annotations": annotations}
-                }
+                "scales": {"x": {"type": "category", "display": False}, "y": {"position": "right", "grid": {"color": "#2a2e39"}, "ticks": {"color": "#fff"}}},
+                "plugins": {"legend": {"display": False}, "annotation": {"annotations": annotations}}
             }
         }
         
@@ -145,9 +106,9 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
 @app.route('/')
 def home():
     html = f"""
-    <html><head><title>cripto_adda V35</title><meta http-equiv="refresh" content="30">
+    <html><head><title>cripto_adda V36</title><meta http-equiv="refresh" content="30">
     <style>body{{background-color:#12161e;color:#e0e0e0;font-family:sans-serif;padding:20px;}}.container{{max-width:900px;margin:auto;}}.card{{background-color:#1a1e29;padding:15px;border-radius:8px;margin-bottom:15px;border:1px solid #2a2e39;}}.buy{{border-left:5px solid #00c864;}}.sell{{border-left:5px solid #ff3c3c;}}table{{width:100%;border-collapse:collapse;margin-top:10px;}}th,td{{text-align:left;padding:8px;border-bottom:1px solid #2a2e39;}}</style></head>
-    <body><div class="container"><h1>🤖 cripto_adda V35</h1>
+    <body><div class="container"><h1>🤖 cripto_adda V36</h1>
     <p>Status: Running 24/7 | TF: {SCAN_TIMEFRAME} | Watchlist: {", ".join(watchlist) if watchlist else "All Coins"}</p><h2>📈 Active Trades</h2>
     """
     if not active_trades: html += "<div class='card'>No active trades. Scanning...</div>"
@@ -355,11 +316,11 @@ def run_manual_scan(tf):
                     last, prev = df.iloc[-1], df.iloc[-2]
                     
                     prev_ema50 = prev['ema50']
-                    pullback_buy = abs(prev['low'] - prev_ema50) / prev_ema50 < 0.003 
-                    bounce_buy = (last['close'] > last['open']) and (last['close'] > prev['high']) 
+                    pullback_buy = abs(prev['low'] - prev_ema50) / prev_ema50 < 0.005 # Relaxed to 0.5%
+                    bounce_buy = last['close'] > last['open'] # Just green candle
 
-                    pullback_sell = abs(prev['high'] - prev_ema50) / prev_ema50 < 0.003
-                    rejection_sell = (last['close'] < last['open']) and (last['close'] < prev['low'])
+                    pullback_sell = abs(prev['high'] - prev_ema50) / prev_ema50 < 0.005
+                    rejection_sell = last['close'] < last['open']
 
                     vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.2)
 
@@ -378,6 +339,7 @@ def run_manual_scan(tf):
                             sl, tp1, tp2, tp3 = entry + risk, entry - (risk * 2.0), entry - (risk * 3.0), entry - (risk * 4.0)
                             
                         clean_sym = m.replace("B-", "").replace("I-", "").replace("_", "")
+                        ema200_status = "🟢" if last['close'] > last['ema200'] else "🔴"
                         text = (
                             f"#{clean_sym} {signal} (RETEST)\n\n"
                             f"Entry: {fmt(entry)}\n"
@@ -385,16 +347,12 @@ def run_manual_scan(tf):
                             f"TP1: {fmt(tp1)}\n"
                             f"TP2: {fmt(tp2)}\n"
                             f"TP3: {fmt(tp3)}\n\n"
+                            f"📊 RSI: {last['rsi']:.1f} | EMA200: {ema200_status}\n"
                             f"#{tf.upper()}TRADE"
                         )
                         
-                        # DIRECT APP LINK
                         dcx_link = f"coindcx://trade/{clean_sym}" 
-                        
-                        markup = {"inline_keyboard": [
-                            [{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], 
-                            [{"text": "📈 Open in CoinDCX App", "url": dcx_link}]
-                        ]}
+                        markup = {"inline_keyboard": [[{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], [{"text": "📈 Open in CoinDCX App", "url": dcx_link}]]}
                         
                         chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1, tp2, tp3)
                         if chart_img: send_telegram_photo(chart_img, text, reply_markup=markup)
@@ -450,7 +408,7 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}],
                                 [{"text": "🗑️ Clear Watchlist", "callback_data": "/clearwatch"}]
                             ]}
-                            send_telegram(f"👋 *Welcome to cripto_adda V35!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome to cripto_adda V36!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
 
                         # -------- INDIAN MARKET FEATURES --------
                         elif text == "/scanindia":
@@ -775,11 +733,11 @@ def scan_market():
                     last, prev = df.iloc[-1], df.iloc[-2]
                     
                     prev_ema50 = prev['ema50']
-                    pullback_buy = abs(prev['low'] - prev_ema50) / prev_ema50 < 0.003
-                    bounce_buy = (last['close'] > last['open']) and (last['close'] > prev['high'])
+                    pullback_buy = abs(prev['low'] - prev_ema50) / prev_ema50 < 0.005 # Relaxed to 0.5%
+                    bounce_buy = last['close'] > last['open'] # Just green candle
 
-                    pullback_sell = abs(prev['high'] - prev_ema50) / prev_ema50 < 0.003
-                    rejection_sell = (last['close'] < last['open']) and (last['close'] < prev['low'])
+                    pullback_sell = abs(prev['high'] - prev_ema50) / prev_ema50 < 0.005
+                    rejection_sell = last['close'] < last['open']
 
                     vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.2)
 
@@ -801,6 +759,8 @@ def scan_market():
                         save_active_trades()
                         
                         clean_sym = m.replace("B-", "").replace("I-", "").replace("_", "")
+                        ema200_status = "🟢" if last['close'] > last['ema200'] else "🔴"
+                        
                         text = (
                             f"#{clean_sym} {signal} (RETEST)\n\n"
                             f"Entry: {fmt(entry)}\n"
@@ -808,16 +768,12 @@ def scan_market():
                             f"TP1: {fmt(tp1)}\n"
                             f"TP2: {fmt(tp2)}\n"
                             f"TP3: {fmt(tp3)}\n\n"
+                            f"📊 RSI: {last['rsi']:.1f} | EMA200: {ema200_status}\n"
                             f"#{SCAN_TIMEFRAME.upper()}TRADE"
                         )
                         
-                        # DIRECT APP LINK
                         dcx_link = f"coindcx://trade/{clean_sym}" 
-                        
-                        markup = {"inline_keyboard": [
-                            [{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], 
-                            [{"text": "📈 Open in CoinDCX App", "url": dcx_link}]
-                        ]}
+                        markup = {"inline_keyboard": [[{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], [{"text": "📈 Open in CoinDCX App", "url": dcx_link}]]}
                         
                         chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1, tp2, tp3)
                         if chart_img: send_telegram_photo(chart_img, text, reply_markup=markup)
