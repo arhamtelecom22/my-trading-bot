@@ -106,9 +106,9 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
 @app.route('/')
 def home():
     html = f"""
-    <html><head><title>cripto_adda V36</title><meta http-equiv="refresh" content="30">
+    <html><head><title>cripto_adda V37</title><meta http-equiv="refresh" content="30">
     <style>body{{background-color:#12161e;color:#e0e0e0;font-family:sans-serif;padding:20px;}}.container{{max-width:900px;margin:auto;}}.card{{background-color:#1a1e29;padding:15px;border-radius:8px;margin-bottom:15px;border:1px solid #2a2e39;}}.buy{{border-left:5px solid #00c864;}}.sell{{border-left:5px solid #ff3c3c;}}table{{width:100%;border-collapse:collapse;margin-top:10px;}}th,td{{text-align:left;padding:8px;border-bottom:1px solid #2a2e39;}}</style></head>
-    <body><div class="container"><h1>🤖 cripto_adda V36</h1>
+    <body><div class="container"><h1>🤖 cripto_adda V37 (Triple Confirmation)</h1>
     <p>Status: Running 24/7 | TF: {SCAN_TIMEFRAME} | Watchlist: {", ".join(watchlist) if watchlist else "All Coins"}</p><h2>📈 Active Trades</h2>
     """
     if not active_trades: html += "<div class='card'>No active trades. Scanning...</div>"
@@ -315,21 +315,15 @@ def run_manual_scan(tf):
                     df = calculate_indicators(df)
                     last, prev = df.iloc[-1], df.iloc[-2]
                     
-                    prev_ema50 = prev['ema50']
-                    pullback_buy = abs(prev['low'] - prev_ema50) / prev_ema50 < 0.005 # Relaxed to 0.5%
-                    bounce_buy = last['close'] > last['open'] # Just green candle
-
-                    pullback_sell = abs(prev['high'] - prev_ema50) / prev_ema50 < 0.005
-                    rejection_sell = last['close'] < last['open']
-
+                    macd_cross_up = (prev['macd'] < prev['macd_signal']) and (last['macd'] > last['macd_signal'])
+                    macd_cross_down = (prev['macd'] > prev['macd_signal']) and (last['macd'] < last['macd_signal'])
                     vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.2)
 
                     signal = None
-                    if vol_spike:
-                        if last['close'] > last['ema200'] and pullback_buy and bounce_buy and last['close'] > last['vwap'] and last['rsi'] > 50:
-                            signal = "BUY"
-                        elif last['close'] < last['ema200'] and pullback_sell and rejection_sell and last['close'] < last['vwap'] and last['rsi'] < 50:
-                            signal = "SELL"
+                    if last['close'] > last['ema200'] and last['close'] > last['vwap'] and last['rsi'] > 50 and macd_cross_up and vol_spike and last['close'] > last['open']:
+                        signal = "BUY"
+                    elif last['close'] < last['ema200'] and last['close'] < last['vwap'] and last['rsi'] < 50 and macd_cross_down and vol_spike and last['close'] < last['open']:
+                        signal = "SELL"
 
                     if signal:
                         entry, risk = last['close'], last['atr'] * 2.0 
@@ -340,8 +334,9 @@ def run_manual_scan(tf):
                             
                         clean_sym = m.replace("B-", "").replace("I-", "").replace("_", "")
                         ema200_status = "🟢" if last['close'] > last['ema200'] else "🔴"
+                        
                         text = (
-                            f"#{clean_sym} {signal} (RETEST)\n\n"
+                            f"#{clean_sym} {signal} (TRIPLE CONFIRM)\n\n"
                             f"Entry: {fmt(entry)}\n"
                             f"SL: {fmt(sl)}\n"
                             f"TP1: {fmt(tp1)}\n"
@@ -408,7 +403,7 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}],
                                 [{"text": "🗑️ Clear Watchlist", "callback_data": "/clearwatch"}]
                             ]}
-                            send_telegram(f"👋 *Welcome to cripto_adda V36!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome to cripto_adda V37!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
 
                         # -------- INDIAN MARKET FEATURES --------
                         elif text == "/scanindia":
@@ -469,7 +464,7 @@ def telegram_commands():
                                 send_telegram("✅ *Auto-scan resumed on 15m timeframe.*")
                             elif parts[1] in ['15m', '1h', '4h']:
                                 target_tf = parts[1]
-                                send_telegram(f"⏳ Running *Strong Retest* manual scan for *{target_tf}*... (Please wait 1-2 mins)")
+                                send_telegram(f"⏳ Running *Triple Confirmation* manual scan for *{target_tf}*... (Please wait 1-2 mins)")
                                 Thread(target=run_manual_scan, args=(target_tf,)).start()
                             else:
                                 send_telegram("⚠️ Invalid timeframe.")
@@ -694,6 +689,12 @@ def calculate_indicators(df):
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     df['rsi'] = 100 - (100 / (1 + (gain / loss)))
+    
+    df['ema12'] = df['close'].ewm(span=12, adjust=False).mean()
+    df['ema26'] = df['close'].ewm(span=26, adjust=False).mean()
+    df['macd'] = df['ema12'] - df['ema26']
+    df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+    
     df['tr'] = pd.concat([df['high'] - df['low'], abs(df['high'] - df['close'].shift()), abs(df['low'] - df['close'].shift())], axis=1).max(axis=1)
     df['atr'] = df['tr'].rolling(window=14).mean()
     df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
@@ -732,21 +733,15 @@ def scan_market():
                     df = calculate_indicators(df)
                     last, prev = df.iloc[-1], df.iloc[-2]
                     
-                    prev_ema50 = prev['ema50']
-                    pullback_buy = abs(prev['low'] - prev_ema50) / prev_ema50 < 0.005 # Relaxed to 0.5%
-                    bounce_buy = last['close'] > last['open'] # Just green candle
-
-                    pullback_sell = abs(prev['high'] - prev_ema50) / prev_ema50 < 0.005
-                    rejection_sell = last['close'] < last['open']
-
+                    macd_cross_up = (prev['macd'] < prev['macd_signal']) and (last['macd'] > last['macd_signal'])
+                    macd_cross_down = (prev['macd'] > prev['macd_signal']) and (last['macd'] < last['macd_signal'])
                     vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.2)
 
                     signal = None
-                    if vol_spike:
-                        if last['close'] > last['ema200'] and pullback_buy and bounce_buy and last['close'] > last['vwap'] and last['rsi'] > 50:
-                            signal = "BUY"
-                        elif last['close'] < last['ema200'] and pullback_sell and rejection_sell and last['close'] < last['vwap'] and last['rsi'] < 50:
-                            signal = "SELL"
+                    if last['close'] > last['ema200'] and last['close'] > last['vwap'] and last['rsi'] > 50 and macd_cross_up and vol_spike and last['close'] > last['open']:
+                        signal = "BUY"
+                    elif last['close'] < last['ema200'] and last['close'] < last['vwap'] and last['rsi'] < 50 and macd_cross_down and vol_spike and last['close'] < last['open']:
+                        signal = "SELL"
 
                     if signal:
                         entry, risk = last['close'], last['atr'] * 2.0 
@@ -762,7 +757,7 @@ def scan_market():
                         ema200_status = "🟢" if last['close'] > last['ema200'] else "🔴"
                         
                         text = (
-                            f"#{clean_sym} {signal} (RETEST)\n\n"
+                            f"#{clean_sym} {signal} (TRIPLE CONFIRM)\n\n"
                             f"Entry: {fmt(entry)}\n"
                             f"SL: {fmt(sl)}\n"
                             f"TP1: {fmt(tp1)}\n"
