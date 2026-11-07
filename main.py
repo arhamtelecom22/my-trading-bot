@@ -6,6 +6,7 @@ from flask import Flask
 from threading import Thread
 import datetime
 import json
+import concurrent.futures
 
 # ================= TOKEN RENDER SE AAYEGA =================
 TG_TOKEN = os.environ.get("TG_TOKEN")
@@ -106,9 +107,9 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
 @app.route('/')
 def home():
     html = f"""
-    <html><head><title>cripto_adda V42</title><meta http-equiv="refresh" content="30">
+    <html><head><title>cripto_adda V43</title><meta http-equiv="refresh" content="30">
     <style>body{{background-color:#12161e;color:#e0e0e0;font-family:sans-serif;padding:20px;}}.container{{max-width:900px;margin:auto;}}.card{{background-color:#1a1e29;padding:15px;border-radius:8px;margin-bottom:15px;border:1px solid #2a2e39;}}.buy{{border-left:5px solid #00c864;}}.sell{{border-left:5px solid #ff3c3c;}}table{{width:100%;border-collapse:collapse;margin-top:10px;}}th,td{{text-align:left;padding:8px;border-bottom:1px solid #2a2e39;}}</style></head>
-    <body><div class="container"><h1>🤖 cripto_adda V42</h1>
+    <body><div class="container"><h1>🤖 cripto_adda V43</h1>
     <p>Status: Running 24/7 | TF: {SCAN_TIMEFRAME} | Watchlist: {", ".join(watchlist) if watchlist else "All Coins"}</p><h2>📈 Active Trades</h2>
     """
     if not active_trades: html += "<div class='card'>No active trades. Scanning...</div>"
@@ -123,7 +124,6 @@ def home():
 def run(): app.run(host='0.0.0.0', port=8080)
 def keep_alive(): Thread(target=run).start()
 
-# ---------------- TELEGRAM HELPERS (FAIL-SAFE) ----------------
 def send_telegram(text, reply_markup=None):
     if not TG_TOKEN: return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
@@ -133,7 +133,6 @@ def send_telegram(text, reply_markup=None):
         r = requests.post(url, json=payload)
         if r.status_code != 200:
             print("TG Error:", r.text)
-            # Fallback to plain text if HTML fails
             payload.pop("parse_mode", None)
             payload["text"] = text.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", "")
             requests.post(url, json=payload)
@@ -149,7 +148,7 @@ def send_telegram_photo(photo_bytes, caption, reply_markup=None):
         r = requests.post(url, files=files, data=data)
         if r.status_code != 200:
             print("TG Photo Error:", r.text)
-            send_telegram(caption, reply_markup) # Fallback to text
+            send_telegram(caption, reply_markup) 
     except: 
         send_telegram(caption, reply_markup)
 
@@ -309,84 +308,105 @@ def monitor_trades():
         except: pass
         time.sleep(15)
 
-# ---------------- MANUAL SIGNAL SCANNER ----------------
+# ---------------- FAST MULTI-THREADED SCANNER ----------------
+def check_single_coin(c):
+    try:
+        m = str(c.get('market', ''))
+        clean_name = m.replace("B-", "").replace("I-", "").replace("_USDT", "").replace("_INR", "")
+        if watchlist and clean_name not in watchlist: return None
+        
+        c_sym = m if '_' in m else ('B-' + m.replace('USDT', '_USDT') if 'USDT' in m else 'I-' + m.replace('INR', '_INR'))
+        
+        k_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval={SCAN_TIMEFRAME}&limit=200", headers=headers, timeout=5)
+        if k_res.status_code != 200: return None
+            
+        k_res = k_res.json()
+        if not isinstance(k_res, list) or len(k_res) < 200: return None
+        
+        k_res.reverse() 
+        df = pd.DataFrame(k_res)
+        for col in ['close', 'high', 'low', 'volume', 'open']: df[col] = df[col].astype(float)
+        df = calculate_indicators(df)
+        last, prev = df.iloc[-1], df.iloc[-2]
+        
+        macd_bullish = last['macd'] > last['macd_signal']
+        macd_bearish = last['macd'] < last['macd_signal']
+        # Vol Spike relaxed to 0.8x for more signals
+        vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 0.8)
+
+        signal = None
+        # VWAP removed for faster signals
+        if last['close'] > last['ema200'] and last['rsi'] > 50 and macd_bullish and vol_spike and last['close'] > last['open']: signal = "BUY"
+        elif last['close'] < last['ema200'] and last['rsi'] < 50 and macd_bearish and vol_spike and last['close'] < last['open']: signal = "SELL"
+
+        if signal:
+            return {
+                'market': m, 'clean': clean_name, 'signal': signal, 
+                'entry': last['close'], 'rsi': last['rsi'], 
+                'df': df, 'ema200': last['ema200']
+            }
+    except: pass
+    return None
+
 def run_manual_scan(tf):
     global MANUAL_SCAN_ACTIVE
     MANUAL_SCAN_ACTIVE = True
+    send_telegram(f"⏳ Scanning Market on <b>{tf}</b>...")
     signals_found = 0
     
     try:
         data = get_ticker_data()
-        if not data: 
-            send_telegram("❌ Failed to fetch market data.")
-            return
+        if not data: return send_telegram("❌ Failed to fetch market data.")
 
-        for c in data:
-            if not isinstance(c, dict): continue
-            m = str(c.get('market', ''))
-            if ('USDT' in m or 'INR' in m) and float(c.get('volume', 0)) > 50000:
-                clean_name = m.replace("B-", "").replace("I-", "").replace("_USDT", "").replace("_INR", "")
-                if watchlist and clean_name not in watchlist: continue
+        valid_coins = [c for c in data if isinstance(c, dict) and ('USDT' in str(c.get('market', '')) or 'INR' in str(c.get('market', ''))) and float(c.get('volume', 0)) > 50000]
+        
+        # Multi-threading: 10 coins at a time
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(check_single_coin, valid_coins))
+
+        for res in results:
+            if res:
+                m, clean_sym, signal = res['market'], res['clean'], res['signal']
+                entry, risk = res['entry'], res['df'].iloc[-1]['atr'] * 2.0 
+                rsi, ema200_val = res['rsi'], res['ema200']
                 
-                c_sym = m if '_' in m else ('B-' + m.replace('USDT', '_USDT') if 'USDT' in m else 'I-' + m.replace('INR', '_INR'))
-                try:
-                    k_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval={tf}&limit=200", headers=headers, timeout=5)
-                    if k_res.status_code != 200: 
-                        time.sleep(1); continue
-                        
-                    k_res = k_res.json()
-                    if not isinstance(k_res, list) or len(k_res) < 200: continue
-                    k_res.reverse() 
-                    df = pd.DataFrame(k_res)
-                    for col in ['close', 'high', 'low', 'volume', 'open']: df[col] = df[col].astype(float)
-                    df = calculate_indicators(df)
-                    last, prev = df.iloc[-1], df.iloc[-2]
+                if signal == "BUY": 
+                    sl, tp1, tp2, tp3 = entry - risk, entry + (risk * 2.0), entry + (risk * 3.0), entry + (risk * 4.0)
+                else: 
+                    sl, tp1, tp2, tp3 = entry + risk, entry - (risk * 2.0), entry - (risk * 3.0), entry - (risk * 4.0)
                     
-                    macd_bullish = last['macd'] > last['macd_signal']
-                    macd_bearish = last['macd'] < last['macd_signal']
-                    vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.0)
-
-                    signal = None
-                    if last['close'] > last['ema200'] and last['close'] > last['vwap'] and last['rsi'] > 50 and macd_bullish and vol_spike and last['close'] > last['open']: signal = "BUY"
-                    elif last['close'] < last['ema200'] and last['close'] < last['vwap'] and last['rsi'] < 50 and macd_bearish and vol_spike and last['close'] < last['open']: signal = "SELL"
-
-                    if signal:
-                        entry, risk = last['close'], last['atr'] * 2.0 
-                        if signal == "BUY": 
-                            sl, tp1, tp2, tp3 = entry - risk, entry + (risk * 2.0), entry + (risk * 3.0), entry + (risk * 4.0)
-                        else: 
-                            sl, tp1, tp2, tp3 = entry + risk, entry - (risk * 2.0), entry - (risk * 3.0), entry - (risk * 4.0)
-                            
-                        clean_sym = m.replace("B-", "").replace("I-", "").replace("_", "")
-                        ema200_status = "🟢" if last['close'] > last['ema200'] else "🔴"
-                        
-                        text = (
-                            f"<b>#{clean_sym} {signal} (STRONG)</b>\n\n"
-                            f"Entry: {fmt(entry)}\n"
-                            f"SL: {fmt(sl)}\n"
-                            f"TP1: {fmt(tp1)}\n"
-                            f"TP2: {fmt(tp2)}\n"
-                            f"TP3: {fmt(tp3)}\n\n"
-                            f"📊 RSI: {last['rsi']:.1f} | EMA200: {ema200_status}\n"
-                            f"#{tf.upper()}TRADE"
-                        )
-                        
-                        dcx_link = f"coindcx://trade/{clean_sym}" 
-                        markup = {"inline_keyboard": [
-                            [{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}],
-                            [{"text": "📈 Open in CoinDCX App", "url": dcx_link}],
-                            [{"text": "❌ Close Trade", "callback_data": f"close_{m}"}]
-                        ]}
-                        
-                        chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1, tp2, tp3)
-                        if chart_img: send_telegram_photo(chart_img, text, reply_markup=markup)
-                        else: send_telegram(text, reply_markup=markup)
-                        
-                        signals_found += 1; time.sleep(1)
-                except: pass
-                time.sleep(1.0) 
-        send_telegram(f"✅ Manual Scan Completed for <b>{tf}</b>.\nFound {signals_found} strong signals.")
-    except: send_telegram("❌ Error during manual scan.")
+                ema200_status = "🟢" if entry > ema200_val else "🔴"
+                
+                text = (
+                    f"<b>#{clean_sym} {signal} (AUTO)</b>\n\n"
+                    f"Entry: {fmt(entry)}\n"
+                    f"SL: {fmt(sl)}\n"
+                    f"TP1: {fmt(tp1)}\n"
+                    f"TP2: {fmt(tp2)}\n"
+                    f"TP3: {fmt(tp3)}\n\n"
+                    f"📊 RSI: {rsi:.1f} | EMA200: {ema200_status}\n"
+                    f"#{tf.upper()}TRADE"
+                )
+                
+                dcx_link = f"coindcx://trade/{clean_sym}" 
+                markup = {"inline_keyboard": [
+                    [{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}],
+                    [{"text": "📈 Open in CoinDCX App", "url": dcx_link}],
+                    [{"text": "❌ Close Trade", "callback_data": f"close_{m}"}]
+                ]}
+                
+                chart_img = generate_chart_image(res['df'], clean_sym, signal, entry, sl, tp1, tp2, tp3)
+                if chart_img: send_telegram_photo(chart_img, text, reply_markup=markup)
+                else: send_telegram(text, reply_markup=markup)
+                
+                active_trades[m] = {'type': signal, 'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'status': 'OPEN'}
+                save_active_trades()
+                signals_found += 1
+                time.sleep(1)
+                
+        send_telegram(f"✅ Scan Completed. Found {signals_found} signals.")
+    except Exception as e:
+        send_telegram(f"❌ Scan Error: {str(e)}")
     finally: MANUAL_SCAN_ACTIVE = False
 
 # ---------------- NEW FEATURES IMPLEMENTATION ----------------
@@ -402,8 +422,8 @@ def calc_risk(symbol, capital):
                     break
         if not price: return send_telegram(f"❌ {symbol} not found.")
         
-        risk_amt = capital * 0.01 # 1% risk
-        sl_dist = price * 0.02 # 2% SL distance
+        risk_amt = capital * 0.01
+        sl_dist = price * 0.02
         qty = risk_amt / sl_dist
         
         msg = (f"🛡️ <b>Position Size Calculator</b>\n\n"
@@ -448,11 +468,11 @@ def run_backtest(symbol):
             row, prev = df.iloc[i], df.iloc[i-1]
             macd_bullish = row['macd'] > row['macd_signal']
             macd_bearish = row['macd'] < row['macd_signal']
-            vol_spike = row['volume'] > (df['volume'].iloc[i-20:i].mean() * 1.0)
+            vol_spike = row['volume'] > (df['volume'].iloc[i-20:i].mean() * 0.8)
             
             signal = None
-            if row['close'] > row['ema200'] and row['close'] > row['vwap'] and row['rsi'] > 50 and macd_bullish and vol_spike and row['close'] > row['open']: signal = "BUY"
-            elif row['close'] < row['ema200'] and row['close'] < row['vwap'] and row['rsi'] < 50 and macd_bearish and vol_spike and row['close'] < row['open']: signal = "SELL"
+            if row['close'] > row['ema200'] and row['rsi'] > 50 and macd_bullish and vol_spike and row['close'] > row['open']: signal = "BUY"
+            elif row['close'] < row['ema200'] and row['rsi'] < 50 and macd_bearish and vol_spike and row['close'] < row['open']: signal = "SELL"
                 
             if signal:
                 entry, risk = row['close'], row['atr'] * 2.0
@@ -526,6 +546,7 @@ def telegram_commands():
                         # -------- MEGA MENU --------
                         if text in ["/start", "/menu"]:
                             markup = {"inline_keyboard": [
+                                [{"text": "🚀 SCAN NOW (Auto Signal)", "callback_data": "scan_now"}],
                                 [{"text": "🌐 Dashboard", "url": "https://my-trading-bot-9se1.onrender.com"}, {"text": "🌍 Global", "callback_data": "/global"}],
                                 [{"text": "🇮🇳 Indian Market Scan", "callback_data": "/scanindia"}],
                                 [{"text": "📊 Nifty 50", "callback_data": "/nifty"}, {"text": "🏦 Bank Nifty", "callback_data": "/banknifty"}],
@@ -543,7 +564,11 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}],
                                 [{"text": "🗑️ Close All Trades", "callback_data": "/closeall"}]
                             ]}
-                            send_telegram(f"👋 <b>Welcome to cripto_adda V42!</b>\nTF: <b>{SCAN_TIMEFRAME}</b> | Coins: <b>{len(watchlist) if watchlist else 'All'}</b>\n\nSelect an option:", reply_markup=markup)
+                            send_telegram(f"👋 <b>Welcome to cripto_adda V43!</b>\nTF: <b>{SCAN_TIMEFRAME}</b> | Coins: <b>{len(watchlist) if watchlist else 'All'}</b>\n\nSelect an option:", reply_markup=markup)
+
+                        elif text == "scan_now":
+                            send_telegram("⏳ Running Fast Multi-Threaded Scan... Please wait.")
+                            Thread(target=run_manual_scan, args=(SCAN_TIMEFRAME,)).start()
 
                         # -------- HELP GUIDES --------
                         elif text == "help_search": send_telegram("🔍 <b>Search Command:</b>\nType: <code>/search BTC</code>")
@@ -876,86 +901,7 @@ def scan_market():
     if MANUAL_SCAN_ACTIVE:
         time.sleep(10)
         return
-
-    print("Starting Auto Market Scan...")
-    try:
-        data = get_ticker_data()
-        if not data: return
-        
-        for c in data:
-            if not isinstance(c, dict): continue
-            m = str(c.get('market', ''))
-            if ('USDT' in m or 'INR' in m) and float(c.get('volume', 0)) > 50000:
-                clean_name = m.replace("B-", "").replace("I-", "").replace("_USDT", "").replace("_INR", "")
-                if watchlist and clean_name not in watchlist: continue
-                
-                c_sym = m if '_' in m else ('B-' + m.replace('USDT', '_USDT') if 'USDT' in m else 'I-' + m.replace('INR', '_INR'))
-                try:
-                    k_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval={SCAN_TIMEFRAME}&limit=200", headers=headers, timeout=5)
-                    if k_res.status_code != 200: 
-                        time.sleep(1); continue
-                        
-                    k_res = k_res.json()
-                    if not isinstance(k_res, list) or len(k_res) < 200: continue
-                    k_res.reverse() 
-                    df = pd.DataFrame(k_res)
-                    for col in ['close', 'high', 'low', 'volume', 'open']: df[col] = df[col].astype(float)
-                    df = calculate_indicators(df)
-                    last, prev = df.iloc[-1], df.iloc[-2]
-                    
-                    macd_bullish = last['macd'] > last['macd_signal']
-                    macd_bearish = last['macd'] < last['macd_signal']
-                    vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.0)
-
-                    signal = None
-                    if last['close'] > last['ema200'] and last['close'] > last['vwap'] and last['rsi'] > 50 and macd_bullish and vol_spike and last['close'] > last['open']: signal = "BUY"
-                    elif last['close'] < last['ema200'] and last['close'] < last['vwap'] and last['rsi'] < 50 and macd_bearish and vol_spike and last['close'] < last['open']: signal = "SELL"
-
-                    if signal:
-                        entry, risk = last['close'], last['atr'] * 2.0 
-                        if signal == "BUY": 
-                            sl, tp1, tp2, tp3 = entry - risk, entry + (risk * 2.0), entry + (risk * 3.0), entry + (risk * 4.0)
-                        else: 
-                            sl, tp1, tp2, tp3 = entry + risk, entry - (risk * 2.0), entry - (risk * 3.0), entry - (risk * 4.0)
-                            
-                        active_trades[m] = {'type': signal, 'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'status': 'OPEN'}
-                        save_active_trades()
-                        
-                        clean_sym = m.replace("B-", "").replace("I-", "").replace("_", "")
-                        ema200_status = "🟢" if last['close'] > last['ema200'] else "🔴"
-                        
-                        text = (
-                            f"<b>#{clean_sym} {signal} (STRONG)</b>\n\n"
-                            f"Entry: {fmt(entry)}\n"
-                            f"SL: {fmt(sl)}\n"
-                            f"TP1: {fmt(tp1)}\n"
-                            f"TP2: {fmt(tp2)}\n"
-                            f"TP3: {fmt(tp3)}\n\n"
-                            f"📊 RSI: {last['rsi']:.1f} | EMA200: {ema200_status}\n"
-                            f"#{SCAN_TIMEFRAME.upper()}TRADE"
-                        )
-                        
-                        dcx_link = f"coindcx://trade/{clean_sym}" 
-                        markup = {"inline_keyboard": [
-                            [{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}],
-                            [{"text": "📈 Open in CoinDCX App", "url": dcx_link}],
-                            [{"text": "❌ Close Trade", "callback_data": f"close_{m}"}]
-                        ]}
-                        
-                        # Bulletproof sending
-                        try:
-                            chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1, tp2, tp3)
-                            if chart_img: send_telegram_photo(chart_img, text, reply_markup=markup)
-                            else: send_telegram(text, reply_markup=markup)
-                        except Exception as e:
-                            print("Signal Send Error:", e)
-                            send_telegram(text, reply_markup=markup) # Force fallback
-                        
-                        print(f"Signal Sent: {clean_sym} {signal}")
-                        
-                except: pass
-                time.sleep(1.2)
-    except: pass
+    run_manual_scan(SCAN_TIMEFRAME)
 
 if __name__ == "__main__":
     load_active_trades()
