@@ -106,9 +106,9 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
 @app.route('/')
 def home():
     html = f"""
-    <html><head><title>cripto_adda V37</title><meta http-equiv="refresh" content="30">
+    <html><head><title>cripto_adda V38</title><meta http-equiv="refresh" content="30">
     <style>body{{background-color:#12161e;color:#e0e0e0;font-family:sans-serif;padding:20px;}}.container{{max-width:900px;margin:auto;}}.card{{background-color:#1a1e29;padding:15px;border-radius:8px;margin-bottom:15px;border:1px solid #2a2e39;}}.buy{{border-left:5px solid #00c864;}}.sell{{border-left:5px solid #ff3c3c;}}table{{width:100%;border-collapse:collapse;margin-top:10px;}}th,td{{text-align:left;padding:8px;border-bottom:1px solid #2a2e39;}}</style></head>
-    <body><div class="container"><h1>🤖 cripto_adda V37 (Triple Confirmation)</h1>
+    <body><div class="container"><h1>🤖 cripto_adda V38</h1>
     <p>Status: Running 24/7 | TF: {SCAN_TIMEFRAME} | Watchlist: {", ".join(watchlist) if watchlist else "All Coins"}</p><h2>📈 Active Trades</h2>
     """
     if not active_trades: html += "<div class='card'>No active trades. Scanning...</div>"
@@ -277,7 +277,25 @@ def monitor_trades():
                         res_text = f"✅ *{clean_sym} Hit TP1*\nSL moved to Entry ({fmt(entry)})."
                         save_active_trades()
                 
-                if res_text: send_telegram(res_text)
+                # --- ADDED: SEND CHART ON EXIT ---
+                if res_text:
+                    try:
+                        k_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={sym}&interval={SCAN_TIMEFRAME}&limit=50", headers=headers, timeout=5).json()
+                        k_res.reverse()
+                        df_exit = pd.DataFrame(k_res)
+                        for col in ['close', 'high', 'low', 'volume', 'open']: df_exit[col] = df_exit[col].astype(float)
+                        chart_img = generate_chart_image(df_exit, clean_sym, signal, entry, sl, tp1, tp2, tp3)
+                        
+                        dcx_link = f"coindcx://trade/{clean_sym}" 
+                        markup = {"inline_keyboard": [[{"text": "📈 Open in CoinDCX App", "url": dcx_link}]]}
+                        
+                        if chart_img:
+                            send_telegram_photo(chart_img, res_text, reply_markup=markup)
+                        else:
+                            send_telegram(res_text, reply_markup=markup)
+                    except:
+                        send_telegram(res_text)
+                        
         except: pass
         time.sleep(15)
 
@@ -315,14 +333,14 @@ def run_manual_scan(tf):
                     df = calculate_indicators(df)
                     last, prev = df.iloc[-1], df.iloc[-2]
                     
-                    macd_cross_up = (prev['macd'] < prev['macd_signal']) and (last['macd'] > last['macd_signal'])
-                    macd_cross_down = (prev['macd'] > prev['macd_signal']) and (last['macd'] < last['macd_signal'])
-                    vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.2)
+                    macd_bullish = last['macd'] > last['macd_signal']
+                    macd_bearish = last['macd'] < last['macd_signal']
+                    vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.0)
 
                     signal = None
-                    if last['close'] > last['ema200'] and last['close'] > last['vwap'] and last['rsi'] > 50 and macd_cross_up and vol_spike and last['close'] > last['open']:
+                    if last['close'] > last['ema200'] and last['close'] > last['vwap'] and last['rsi'] > 50 and macd_bullish and vol_spike and last['close'] > last['open']:
                         signal = "BUY"
-                    elif last['close'] < last['ema200'] and last['close'] < last['vwap'] and last['rsi'] < 50 and macd_cross_down and vol_spike and last['close'] < last['open']:
+                    elif last['close'] < last['ema200'] and last['close'] < last['vwap'] and last['rsi'] < 50 and macd_bearish and vol_spike and last['close'] < last['open']:
                         signal = "SELL"
 
                     if signal:
@@ -336,7 +354,7 @@ def run_manual_scan(tf):
                         ema200_status = "🟢" if last['close'] > last['ema200'] else "🔴"
                         
                         text = (
-                            f"#{clean_sym} {signal} (TRIPLE CONFIRM)\n\n"
+                            f"#{clean_sym} {signal} (STRONG)\n\n"
                             f"Entry: {fmt(entry)}\n"
                             f"SL: {fmt(sl)}\n"
                             f"TP1: {fmt(tp1)}\n"
@@ -403,7 +421,7 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}],
                                 [{"text": "🗑️ Clear Watchlist", "callback_data": "/clearwatch"}]
                             ]}
-                            send_telegram(f"👋 *Welcome to cripto_adda V37!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome to cripto_adda V38!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
 
                         # -------- INDIAN MARKET FEATURES --------
                         elif text == "/scanindia":
@@ -464,7 +482,7 @@ def telegram_commands():
                                 send_telegram("✅ *Auto-scan resumed on 15m timeframe.*")
                             elif parts[1] in ['15m', '1h', '4h']:
                                 target_tf = parts[1]
-                                send_telegram(f"⏳ Running *Triple Confirmation* manual scan for *{target_tf}*... (Please wait 1-2 mins)")
+                                send_telegram(f"⏳ Running *Strong* manual scan for *{target_tf}*... (Please wait 1-2 mins)")
                                 Thread(target=run_manual_scan, args=(target_tf,)).start()
                             else:
                                 send_telegram("⚠️ Invalid timeframe.")
@@ -733,14 +751,14 @@ def scan_market():
                     df = calculate_indicators(df)
                     last, prev = df.iloc[-1], df.iloc[-2]
                     
-                    macd_cross_up = (prev['macd'] < prev['macd_signal']) and (last['macd'] > last['macd_signal'])
-                    macd_cross_down = (prev['macd'] > prev['macd_signal']) and (last['macd'] < last['macd_signal'])
-                    vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.2)
+                    macd_bullish = last['macd'] > last['macd_signal']
+                    macd_bearish = last['macd'] < last['macd_signal']
+                    vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.0)
 
                     signal = None
-                    if last['close'] > last['ema200'] and last['close'] > last['vwap'] and last['rsi'] > 50 and macd_cross_up and vol_spike and last['close'] > last['open']:
+                    if last['close'] > last['ema200'] and last['close'] > last['vwap'] and last['rsi'] > 50 and macd_bullish and vol_spike and last['close'] > last['open']:
                         signal = "BUY"
-                    elif last['close'] < last['ema200'] and last['close'] < last['vwap'] and last['rsi'] < 50 and macd_cross_down and vol_spike and last['close'] < last['open']:
+                    elif last['close'] < last['ema200'] and last['close'] < last['vwap'] and last['rsi'] < 50 and macd_bearish and vol_spike and last['close'] < last['open']:
                         signal = "SELL"
 
                     if signal:
@@ -757,7 +775,7 @@ def scan_market():
                         ema200_status = "🟢" if last['close'] > last['ema200'] else "🔴"
                         
                         text = (
-                            f"#{clean_sym} {signal} (TRIPLE CONFIRM)\n\n"
+                            f"#{clean_sym} {signal} (STRONG)\n\n"
                             f"Entry: {fmt(entry)}\n"
                             f"SL: {fmt(sl)}\n"
                             f"TP1: {fmt(tp1)}\n"
