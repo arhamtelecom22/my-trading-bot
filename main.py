@@ -106,9 +106,9 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
 @app.route('/')
 def home():
     html = f"""
-    <html><head><title>cripto_adda V38</title><meta http-equiv="refresh" content="30">
+    <html><head><title>cripto_adda V39</title><meta http-equiv="refresh" content="30">
     <style>body{{background-color:#12161e;color:#e0e0e0;font-family:sans-serif;padding:20px;}}.container{{max-width:900px;margin:auto;}}.card{{background-color:#1a1e29;padding:15px;border-radius:8px;margin-bottom:15px;border:1px solid #2a2e39;}}.buy{{border-left:5px solid #00c864;}}.sell{{border-left:5px solid #ff3c3c;}}table{{width:100%;border-collapse:collapse;margin-top:10px;}}th,td{{text-align:left;padding:8px;border-bottom:1px solid #2a2e39;}}</style></head>
-    <body><div class="container"><h1>🤖 cripto_adda V38</h1>
+    <body><div class="container"><h1>🤖 cripto_adda V39</h1>
     <p>Status: Running 24/7 | TF: {SCAN_TIMEFRAME} | Watchlist: {", ".join(watchlist) if watchlist else "All Coins"}</p><h2>📈 Active Trades</h2>
     """
     if not active_trades: html += "<div class='card'>No active trades. Scanning...</div>"
@@ -156,62 +156,7 @@ def get_ticker_data():
     except: pass
     return last_ticker_data if last_ticker_data else []
 
-# ---------------- INDIAN MARKET DATA ----------------
-INDIAN_TICKERS = {
-    "NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "SENSEX": "^BSESN",
-    "RELIANCE": "RELIANCE.NS", "TCS": "TCS.NS", "HDFC BANK": "HDFCBANK.NS",
-    "ICICI BANK": "ICICIBANK.NS", "INFOSYS": "INFY.NS", "ITC": "ITC.NS",
-    "SBI": "SBIN.NS", "BHARTI AIRTEL": "BHARTIARTL.NS"
-}
-
-def get_yahoo_data(ticker, interval="15m", range="5d"):
-    try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval={interval}&range={range}"
-        res = requests.get(url, headers=headers, timeout=10).json()
-        result = res['chart']['result'][0]
-        closes = result['indicators']['quote'][0]['close']
-        data = [c for c in closes if c is not None]
-        if len(data) < 50: return None
-        return data
-    except: return None
-
-def scan_indian_market():
-    signals_found = 0
-    for name, ticker in INDIAN_TICKERS.items():
-        closes = get_yahoo_data(ticker)
-        if not closes: continue
-        
-        df = pd.DataFrame(closes, columns=['close'])
-        df = calculate_indicators(df)
-        last, prev = df.iloc[-1], df.iloc[-2]
-        
-        signal = None
-        if last['close'] > last['ema200'] and last['rsi'] > 60 and last['close'] > prev['close']:
-            signal = "BUY"
-        elif last['close'] < last['ema200'] and last['rsi'] < 40 and last['close'] < prev['close']:
-            signal = "SELL"
-            
-        if signal:
-            entry = last['close']
-            risk = last['atr'] * 2.0
-            if signal == "BUY": 
-                sl, tp1 = entry - risk, entry + (risk * 2.0)
-            else: 
-                sl, tp1 = entry + risk, entry - (risk * 2.0)
-                
-            text = (
-                f"🇮🇳 *#{name} {signal}*\n\n"
-                f"Price: ₹{fmt(entry)}\n"
-                f"SL: ₹{fmt(sl)}\n"
-                f"Target: ₹{fmt(tp1)}\n\n"
-                f"📊 RSI: {last['rsi']:.1f}"
-            )
-            send_telegram(text)
-            signals_found += 1
-            time.sleep(2)
-    return signals_found
-
-# ---------------- MONITOR TRADES ----------------
+# ---------------- MONITOR TRADES (WITH EXIT CHART) ----------------
 def monitor_trades():
     while True:
         try:
@@ -277,23 +222,30 @@ def monitor_trades():
                         res_text = f"✅ *{clean_sym} Hit TP1*\nSL moved to Entry ({fmt(entry)})."
                         save_active_trades()
                 
-                # --- ADDED: SEND CHART ON EXIT ---
+                # --- SEND CHART ON EXIT ---
                 if res_text:
                     try:
-                        k_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={sym}&interval={SCAN_TIMEFRAME}&limit=50", headers=headers, timeout=5).json()
-                        k_res.reverse()
-                        df_exit = pd.DataFrame(k_res)
-                        for col in ['close', 'high', 'low', 'volume', 'open']: df_exit[col] = df_exit[col].astype(float)
-                        chart_img = generate_chart_image(df_exit, clean_sym, signal, entry, sl, tp1, tp2, tp3)
+                        # Ensure sym format is correct for API
+                        c_sym_exit = sym if '_' in sym else ('B-' + sym.replace('USDT', '_USDT') if 'USDT' in sym else 'I-' + sym.replace('INR', '_INR'))
+                        k_res = requests.get(f"https://public.coindcx.com/market_data/candles?pair={c_sym_exit}&interval={SCAN_TIMEFRAME}&limit=50", headers=headers, timeout=10).json()
                         
-                        dcx_link = f"coindcx://trade/{clean_sym}" 
-                        markup = {"inline_keyboard": [[{"text": "📈 Open in CoinDCX App", "url": dcx_link}]]}
-                        
-                        if chart_img:
-                            send_telegram_photo(chart_img, res_text, reply_markup=markup)
+                        if isinstance(k_res, list) and len(k_res) > 0:
+                            k_res.reverse()
+                            df_exit = pd.DataFrame(k_res)
+                            for col in ['close', 'high', 'low', 'volume', 'open']: df_exit[col] = df_exit[col].astype(float)
+                            chart_img = generate_chart_image(df_exit, clean_sym, signal, entry, sl, tp1, tp2, tp3)
+                            
+                            dcx_link = f"coindcx://trade/{clean_sym}" 
+                            markup = {"inline_keyboard": [[{"text": "📈 Open in CoinDCX App", "url": dcx_link}]]}
+                            
+                            if chart_img:
+                                send_telegram_photo(chart_img, res_text, reply_markup=markup)
+                            else:
+                                send_telegram(res_text, reply_markup=markup)
                         else:
-                            send_telegram(res_text, reply_markup=markup)
-                    except:
+                            send_telegram(res_text)
+                    except Exception as e:
+                        print("Exit Chart Error:", e)
                         send_telegram(res_text)
                         
         except: pass
@@ -365,7 +317,11 @@ def run_manual_scan(tf):
                         )
                         
                         dcx_link = f"coindcx://trade/{clean_sym}" 
-                        markup = {"inline_keyboard": [[{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], [{"text": "📈 Open in CoinDCX App", "url": dcx_link}]]}
+                        markup = {"inline_keyboard": [
+                            [{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}],
+                            [{"text": "📈 Open in CoinDCX App", "url": dcx_link}],
+                            [{"text": "❌ Close Trade", "callback_data": f"close_{m}"}] # NEW CLOSE BUTTON
+                        ]}
                         
                         chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1, tp2, tp3)
                         if chart_img: send_telegram_photo(chart_img, text, reply_markup=markup)
@@ -395,9 +351,30 @@ def telegram_commands():
                 for update in res["result"]:
                     offset = update["update_id"] + 1
                     
+                    # -------- HANDLE CALLBACK QUERIES (BUTTON CLICKS) --------
                     if "callback_query" in update:
+                        callback_id = update["callback_query"]["id"]
                         text = update["callback_query"]["data"]
                         chat_id = update["callback_query"]["message"]["chat"]["id"]
+                        
+                        if text.startswith("close_"):
+                            sym_to_close = text.replace("close_", "")
+                            if sym_to_close in active_trades:
+                                del active_trades[sym_to_close]
+                                save_active_trades()
+                                clean = sym_to_close.replace("B-", "").replace("I-", "").replace("_", "")
+                                send_telegram(f"🛑 *Trade Manually Closed*\n🪙 Coin: {clean}\n_Trade removed from active list._")
+                            else:
+                                send_telegram("⚠️ Trade already closed or not found.")
+                            
+                            # Answer callback to stop loading spinner
+                            try:
+                                requests.get(f"https://api.telegram.org/bot{TG_TOKEN}/answerCallbackQuery?callback_query_id={callback_id}")
+                            except: pass
+                            continue
+                            
+                        text = text # for other callbacks
+                    
                     else:
                         text = update.get("message", {}).get("text", "")
                         chat_id = update.get("message", {}).get("chat", {}).get("id")
@@ -421,7 +398,7 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}],
                                 [{"text": "🗑️ Clear Watchlist", "callback_data": "/clearwatch"}]
                             ]}
-                            send_telegram(f"👋 *Welcome to cripto_adda V38!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
+                            send_telegram(f"👋 *Welcome to cripto_adda V39!*\nTF: *{SCAN_TIMEFRAME}* | Coins: *{len(watchlist) if watchlist else 'All'}*\n\nSelect an option:", reply_markup=markup)
 
                         # -------- INDIAN MARKET FEATURES --------
                         elif text == "/scanindia":
@@ -786,7 +763,11 @@ def scan_market():
                         )
                         
                         dcx_link = f"coindcx://trade/{clean_sym}" 
-                        markup = {"inline_keyboard": [[{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}], [{"text": "📈 Open in CoinDCX App", "url": dcx_link}]]}
+                        markup = {"inline_keyboard": [
+                            [{"text": f"📋 Copy '{clean_sym}'", "copy_text": {"text": clean_sym}}],
+                            [{"text": "📈 Open in CoinDCX App", "url": dcx_link}],
+                            [{"text": "❌ Close Trade", "callback_data": f"close_{m}"}] # NEW CLOSE BUTTON
+                        ]}
                         
                         chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1, tp2, tp3)
                         if chart_img: send_telegram_photo(chart_img, text, reply_markup=markup)
