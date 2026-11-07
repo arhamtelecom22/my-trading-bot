@@ -96,7 +96,7 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
         }
         
         payload = {"chart": chart_config, "width": 800, "height": 450, "backgroundColor": "#131722", "version": "3"}
-        res = requests.post("https://quickchart.io/chart", json=payload, timeout=10) # Timeout set to 10s
+        res = requests.post("https://quickchart.io/chart", json=payload, timeout=10)
         if res.status_code == 200: return res.content
     except Exception as e:
         print("Chart Error:", e)
@@ -106,9 +106,9 @@ def generate_chart_image(df, symbol, signal, entry, sl, tp1, tp2, tp3):
 @app.route('/')
 def home():
     html = f"""
-    <html><head><title>cripto_adda V41</title><meta http-equiv="refresh" content="30">
+    <html><head><title>cripto_adda V42</title><meta http-equiv="refresh" content="30">
     <style>body{{background-color:#12161e;color:#e0e0e0;font-family:sans-serif;padding:20px;}}.container{{max-width:900px;margin:auto;}}.card{{background-color:#1a1e29;padding:15px;border-radius:8px;margin-bottom:15px;border:1px solid #2a2e39;}}.buy{{border-left:5px solid #00c864;}}.sell{{border-left:5px solid #ff3c3c;}}table{{width:100%;border-collapse:collapse;margin-top:10px;}}th,td{{text-align:left;padding:8px;border-bottom:1px solid #2a2e39;}}</style></head>
-    <body><div class="container"><h1>🤖 cripto_adda V41</h1>
+    <body><div class="container"><h1>🤖 cripto_adda V42</h1>
     <p>Status: Running 24/7 | TF: {SCAN_TIMEFRAME} | Watchlist: {", ".join(watchlist) if watchlist else "All Coins"}</p><h2>📈 Active Trades</h2>
     """
     if not active_trades: html += "<div class='card'>No active trades. Scanning...</div>"
@@ -123,25 +123,35 @@ def home():
 def run(): app.run(host='0.0.0.0', port=8080)
 def keep_alive(): Thread(target=run).start()
 
-# ---------------- TELEGRAM HELPERS (HTML FORMAT) ----------------
+# ---------------- TELEGRAM HELPERS (FAIL-SAFE) ----------------
 def send_telegram(text, reply_markup=None):
     if not TG_TOKEN: return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    # Changed to HTML to avoid Markdown errors
     payload = {"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
     if reply_markup: payload["reply_markup"] = reply_markup
-    try: requests.post(url, json=payload)
+    try: 
+        r = requests.post(url, json=payload)
+        if r.status_code != 200:
+            print("TG Error:", r.text)
+            # Fallback to plain text if HTML fails
+            payload.pop("parse_mode", None)
+            payload["text"] = text.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", "")
+            requests.post(url, json=payload)
     except: pass
 
 def send_telegram_photo(photo_bytes, caption, reply_markup=None):
     if not TG_TOKEN: return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
     files = {'photo': ('chart.png', photo_bytes, 'image/png')}
-    # Changed to HTML
     data = {"chat_id": TG_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
     if reply_markup: data["reply_markup"] = json.dumps(reply_markup)
-    try: requests.post(url, files=files, data=data)
-    except: pass
+    try: 
+        r = requests.post(url, files=files, data=data)
+        if r.status_code != 200:
+            print("TG Photo Error:", r.text)
+            send_telegram(caption, reply_markup) # Fallback to text
+    except: 
+        send_telegram(caption, reply_markup)
 
 headers = {'User-Agent': 'Mozilla/5.0'}
 last_ticker_data, last_ticker_time = [], 0
@@ -533,7 +543,7 @@ def telegram_commands():
                                 [{"text": "🔔 Alert", "callback_data": "help_alert"}, {"text": "⭐ Watchlist", "callback_data": "help_watch"}],
                                 [{"text": "🗑️ Close All Trades", "callback_data": "/closeall"}]
                             ]}
-                            send_telegram(f"👋 <b>Welcome to cripto_adda V41!</b>\nTF: <b>{SCAN_TIMEFRAME}</b> | Coins: <b>{len(watchlist) if watchlist else 'All'}</b>\n\nSelect an option:", reply_markup=markup)
+                            send_telegram(f"👋 <b>Welcome to cripto_adda V42!</b>\nTF: <b>{SCAN_TIMEFRAME}</b> | Coins: <b>{len(watchlist) if watchlist else 'All'}</b>\n\nSelect an option:", reply_markup=markup)
 
                         # -------- HELP GUIDES --------
                         elif text == "help_search": send_telegram("🔍 <b>Search Command:</b>\nType: <code>/search BTC</code>")
@@ -618,15 +628,13 @@ def telegram_commands():
                         elif text == "/trades":
                             if not active_trades: send_telegram("💤 <b>No active trades.</b>")
                             else:
-                                msg = "📈 <b>Active Trades:</b>\n\n"
-                                keyboard = []
+                                send_telegram("📈 <b>Your Active Trades:</b>")
                                 for s, t in active_trades.items():
                                     clean_s = s.replace("B-","").replace("I-","").replace("_","")
-                                    msg += f"🪙 <b>{clean_s}</b> ({t['type']})\nEntry: {fmt(t['entry'])} | SL: {fmt(t['sl'])}\n\n"
-                                    keyboard.append([{"text": f"❌ Close {clean_s}", "callback_data": f"close_{s}"}])
-                                
-                                markup = {"inline_keyboard": keyboard}
-                                send_telegram(msg, reply_markup=markup)
+                                    msg = f"🪙 <b>{clean_s}</b> ({t['type']})\nEntry: {fmt(t['entry'])} | SL: {fmt(t['sl'])}"
+                                    markup = {"inline_keyboard": [[{"text": f"❌ Close {clean_s}", "callback_data": f"close_{s}"}]]}
+                                    send_telegram(msg, reply_markup=markup)
+                                    time.sleep(0.5)
 
                         # -------- STANDARD CRYPTO FEATURES --------
                         elif text.startswith("/signal"):
@@ -934,9 +942,14 @@ def scan_market():
                             [{"text": "❌ Close Trade", "callback_data": f"close_{m}"}]
                         ]}
                         
-                        chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1, tp2, tp3)
-                        if chart_img: send_telegram_photo(chart_img, text, reply_markup=markup)
-                        else: send_telegram(text, reply_markup=markup)
+                        # Bulletproof sending
+                        try:
+                            chart_img = generate_chart_image(df, clean_sym, signal, entry, sl, tp1, tp2, tp3)
+                            if chart_img: send_telegram_photo(chart_img, text, reply_markup=markup)
+                            else: send_telegram(text, reply_markup=markup)
+                        except Exception as e:
+                            print("Signal Send Error:", e)
+                            send_telegram(text, reply_markup=markup) # Force fallback
                         
                         print(f"Signal Sent: {clean_sym} {signal}")
                         
