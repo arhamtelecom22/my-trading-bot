@@ -24,22 +24,16 @@ def fmt(p):
 
 # ---------------- INDICATORS ----------------
 def calculate_pro_indicators(df):
-    # 1. EMA 200
     df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
-    
-    # 2. MACD
     df['ema12'] = df['close'].ewm(span=12, adjust=False).mean()
     df['ema26'] = df['close'].ewm(span=26, adjust=False).mean()
     df['macd'] = df['ema12'] - df['ema26']
     df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
-    
-    # 3. Bollinger Bands
     df['sma20'] = df['close'].rolling(window=20).mean()
     df['std20'] = df['close'].rolling(window=20).std()
     df['bb_upper'] = df['sma20'] + (df['std20'] * 2)
     df['bb_lower'] = df['sma20'] - (df['std20'] * 2)
     
-    # 4. RSI & Stoch RSI
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -49,19 +43,15 @@ def calculate_pro_indicators(df):
     df['rsi_max'] = df['rsi'].rolling(14).max()
     df['stoch_rsi'] = (df['rsi'] - df['rsi_min']) / (df['rsi_max'] - df['rsi_min'])
     
-    # 5. Heiken Ashi
     df['ha_close'] = (df['open'] + df['high'] + df['low'] + df['close']) / 4
     df['ha_open'] = (df['open'].shift(1) + df['close'].shift(1)) / 2
     df['ha_bullish'] = df['ha_close'] > df['ha_open']
     
-    # 6. Ichimoku Cloud (Basic Tenkan & Kijun)
     df['tenkan'] = (df['high'].rolling(9).max() + df['low'].rolling(9).min()) / 2
     df['kijun'] = (df['high'].rolling(26).max() + df['low'].rolling(26).min()) / 2
     
-    # 7. OBV (On Balance Volume)
     df['obv'] = (np.sign(df['close'].diff()) * df['volume']).fillna(0).cumsum()
     df['obv_ema'] = df['obv'].ewm(span=20, adjust=False).mean()
-    
     return df
 
 # ---------------- CHART ----------------
@@ -71,7 +61,6 @@ def gen_chart(df, symbol, signal, entry, sl, tp1, tp2, tp3):
         data = [{"x": str(i), "o": float(r.open), "h": float(r.high), "l": float(r.low), "c": float(r.close)} for i, r in enumerate(df.itertuples()) if not pd.isna(r.open)]
         max_x = len(data) - 1
         if max_x < 1: return None
-        
         ann = {"entry": {"type": "line", "yMin": entry, "yMax": entry, "borderColor": "#4a9eff", "borderWidth": 3}}
         if signal == "BUY":
             ann['profit'] = {"type": "box", "yMin": entry, "yMax": tp1, "backgroundColor": "rgba(0,200,100,0.05)", "borderColor": "rgba(0,200,100,0.4)", "xMin": 0, "xMax": max_x}
@@ -79,10 +68,7 @@ def gen_chart(df, symbol, signal, entry, sl, tp1, tp2, tp3):
         else:
             ann['profit'] = {"type": "box", "yMin": tp1, "yMax": entry, "backgroundColor": "rgba(0,200,100,0.05)", "borderColor": "rgba(0,200,100,0.4)", "xMin": 0, "xMax": max_x}
             ann['loss'] = {"type": "box", "yMin": entry, "yMax": sl, "backgroundColor": "rgba(255,60,60,0.05)", "borderColor": "rgba(255,60,60,0.4)", "xMin": 0, "xMax": max_x}
-
-        cfg = {"type": "candlestick", "data": {"datasets": [{"data": data, "color": {"up": "#00c864", "down": "#ff3c3c"}}]}, 
-               "options": {"scales": {"x": {"display": False}, "y": {"position": "right", "ticks": {"color": "#fff"}}}, "plugins": {"legend": {"display": False}, "annotation": {"annotations": ann}}}}
-        
+        cfg = {"type": "candlestick", "data": {"datasets": [{"data": data, "color": {"up": "#00c864", "down": "#ff3c3c"}}]}, "options": {"scales": {"x": {"display": False}, "y": {"position": "right", "ticks": {"color": "#fff"}}}, "plugins": {"legend": {"display": False}, "annotation": {"annotations": ann}}}}
         res = requests.post("https://quickchart.io/chart", json={"chart": cfg, "width": 800, "height": 450, "backgroundColor": "#131722", "version": "3"}, timeout=10)
         if res.status_code == 200: return res.content
     except: pass
@@ -121,9 +107,9 @@ def get_kline(sym, tf, lim=200):
     except: pass
     return []
 
-# ---------------- AI ANALYSIS ----------------
+# ---------------- AI ----------------
 def get_ai_verdict(symbol, signal, score):
-    prompt = f"Stock: {symbol}, Signal: {signal}, Confluence Score: {score}/7 (Trend, Momentum, Volume all aligned). Reply in ONE sentence with a strong verdict."
+    prompt = f"Stock: {symbol}, Signal: {signal}, Confluence Score: {score}/7. Reply in ONE sentence with a strong verdict."
     try:
         if GROQ_API_KEY:
             url = "https://api.groq.com/openai/v1/chat/completions"
@@ -139,14 +125,14 @@ def get_ai_verdict(symbol, signal, score):
     except: pass
     return "AI analysis unavailable."
 
-# ---------------- SCANNER (MULTI-INDICATOR LOGIC) ----------------
+# ---------------- SCANNER ----------------
 def scan_market():
-    print("Scanning CoinDCX with Pro Strategy...")
+    print("Scanning CoinDCX...")
     data = get_ticker()
     if not data: return
     
     valid = [c for c in data if isinstance(c, dict) and 'USDT' in str(c.get('market')) and float(c.get('volume', 0)) > 100000]
-    valid = sorted(valid, key=lambda x: float(x.get('volume', 0)), reverse=True)[:40] # Top 40 volume
+    valid = sorted(valid, key=lambda x: float(x.get('volume', 0)), reverse=True)[:40]
     
     for c in valid:
         sym = c['market']
@@ -161,39 +147,30 @@ def scan_market():
         
         last = df.iloc[-1]
         
-        # --- SCORING SYSTEM (Out of 7) ---
         buy_score = 0
         sell_score = 0
         
-        # 1. Trend (EMA200)
         if last['close'] > last['ema200']: buy_score += 1
         if last['close'] < last['ema200']: sell_score += 1
         
-        # 2. Ichimoku (Above Kijun)
         if last['close'] > last['kijun']: buy_score += 1
         if last['close'] < last['kijun']: sell_score += 1
         
-        # 3. Heiken Ashi
         if last['ha_bullish']: buy_score += 1
         else: sell_score += 1
         
-        # 4. MACD
         if last['macd'] > last['macd_signal']: buy_score += 1
         if last['macd'] < last['macd_signal']: sell_score += 1
         
-        # 5. RSI/StochRSI
         if last['rsi'] > 50 and last['stoch_rsi'] > 0.5: buy_score += 1
         if last['rsi'] < 50 and last['stoch_rsi'] < 0.5: sell_score += 1
         
-        # 6. Bollinger Bands (Price above middle or broke upper)
         if last['close'] > last['sma20']: buy_score += 1
         if last['close'] < last['sma20']: sell_score += 1
         
-        # 7. OBV (Smart Money)
         if last['obv'] > last['obv_ema']: buy_score += 1
         if last['obv'] < last['obv_ema']: sell_score += 1
         
-        # ULTRA STRICT ENTRY (Need at least 6 out of 7 alignments)
         sig = None
         score = 0
         if buy_score >= 6 and last['close'] > last['open']: 
@@ -216,30 +193,24 @@ def scan_market():
             
             text = (
                 f"<b>🔥 #{clean_sym} {sig} (PRO)</b>\n\n"
-                f"Entry: {fmt(entry)}\n"
-                f"SL: {fmt(sl)}\n"
-                f"TP1: {fmt(tp1)}\n"
-                f"TP2: {fmt(tp2)}\n"
-                f"TP3: {fmt(tp3)}\n\n"
-                f"📊 <b>Confluence:</b> {score}/7 Indicators Aligned\n"
+                f"Entry: {fmt(entry)}\nSL: {fmt(sl)}\nTP1: {fmt(tp1)}\nTP2: {fmt(tp2)}\nTP3: {fmt(tp3)}\n\n"
+                f"📊 <b>Confluence:</b> {score}/7 Indicators\n"
                 f"🤖 <b>AI:</b> <i>{ai_text}</i>\n"
                 f"⏱ TF: 15m"
             )
             
             markup = {"inline_keyboard": [[{"text": f"📋 Copy", "copy_text": {"text": clean_sym}}], [{"text": "📈 Open CoinDCX", "url": f"coindcx://trade/{clean_sym}"}], [{"text": "❌ Close", "callback_data": f"close_{sym}"}]]}
-            
             img = gen_chart(df, clean_sym, sig, entry, sl, tp1, tp2, tp3)
             send_photo(img, text, markup)
             
             active_trades[sym] = {'type': sig, 'entry': entry, 'sl': sl, 'tp1': tp1}
-            print(f"PRO Signal Sent: {clean_sym} {sig} (Score: {score})")
-            time.sleep(5) # Gap to avoid Telegram limit
+            print(f"PRO Signal Sent: {clean_sym} {sig}")
+            time.sleep(5)
 
-# ---------------- BOT LOOP ----------------
 def bot_loop():
     while True:
         scan_market()
-        time.sleep(300) # Scan every 5 mins
+        time.sleep(300)
 
 # ---------------- MONITOR ----------------
 def monitor():
@@ -259,7 +230,7 @@ def monitor():
         except: pass
         time.sleep(20)
 
-# ---------------- COMMANDS ----------------
+# ---------------- COMMANDS (FIXED) ----------------
 def commands():
     offset = 0
     while True:
@@ -268,32 +239,40 @@ def commands():
             if res.get("ok") and res["result"]:
                 for u in res["result"]:
                     offset = u["update_id"] + 1
+                    
+                    # HANDLE CALLBACK QUERIES (BUTTONS)
                     if "callback_query" in u:
                         cb_id = u["callback_query"]["id"]
                         txt = u["callback_query"]["data"]
-                        if txt.startswith("close_"):
-                            sym = txt.replace("close_", "")
-                            if sym in active_trades: del active_trades[sym]
-                            send_msg(f"🛑 Trade Manually Closed.")
+                        cid = u["callback_query"]["message"]["chat"]["id"]
+                        
+                        if str(cid) == str(TG_CHAT_ID):
+                            if txt.startswith("close_"):
+                                sym = txt.replace("close_", "")
+                                if sym in active_trades: del active_trades[sym]
+                                send_msg(f"🛑 Trade Manually Closed.")
+                            elif txt == "scan":
+                                send_msg("⏳ Manual PRO scan starting...")
+                                Thread(target=scan_market).start()
+                            elif txt == "trades":
+                                if not active_trades: send_msg("💤 No active trades.")
+                                else:
+                                    for s, t in active_trades.items():
+                                        send_msg(f"🪙 <b>{s.replace('B-','').replace('_','')}</b> ({t['type']})\nEntry: {fmt(t['entry'])}", {"inline_keyboard": [[{"text": "❌ Close", "callback_data": f"close_{s}"}]]})
+                                        time.sleep(0.5)
+                        
+                        # ALWAYS ANSWER CALLBACK TO STOP LOADING SPINNER
                         requests.get(f"https://api.telegram.org/bot{TG_TOKEN}/answerCallbackQuery?callback_query_id={cb_id}")
                         continue
                     
+                    # HANDLE TEXT MESSAGES
                     txt = u.get("message", {}).get("text", "")
                     cid = u.get("message", {}).get("chat", {}).get("id")
                     
                     if str(cid) == str(TG_CHAT_ID):
                         if txt in ["/start", "/menu"]:
                             markup = {"inline_keyboard": [[{"text": "🚀 SCAN NOW", "callback_data": "scan"}], [{"text": "📊 Active Trades", "callback_data": "trades"}]]}
-                            send_msg("👋 <b>Welcome to V53 (PRO Strategy)!</b>\nBot is using 7+ Indicators with AI.", markup)
-                        elif txt == "scan":
-                            send_msg("⏳ Manual PRO scan starting...")
-                            Thread(target=scan_market).start()
-                        elif txt == "trades":
-                            if not active_trades: send_msg("No active trades.")
-                            else:
-                                for s, t in active_trades.items():
-                                    send_msg(f"🪙 {s.replace('B-','').replace('_','')} ({t['type']})\nEntry: {fmt(t['entry'])}", {"inline_keyboard": [[{"text": "❌ Close", "callback_data": f"close_{s}"}]]})
-                                    time.sleep(0.5)
+                            send_msg("👋 <b>Welcome to V54 (PRO Strategy)!</b>\nBot is using 7+ Indicators with AI.", markup)
                         elif txt == "/top":
                             data = get_ticker()
                             valid = [{'m': c['market'], 'c': float(c.get('change24hour', 0))} for c in data if isinstance(c, dict) and 'USDT' in str(c.get('market'))]
@@ -308,7 +287,8 @@ def commands():
                             msg = "📉 <b>Top Losers</b>\n\n"
                             for i, c in enumerate(bot): msg += f"{i+1}. {c['m'].replace('B-','').replace('_','')}: {c['c']:+.2f}%\n"
                             send_msg(msg)
-        except: pass
+        except Exception as e:
+            print("Command Error:", e)
         time.sleep(2)
 
 if __name__ == "__main__":
