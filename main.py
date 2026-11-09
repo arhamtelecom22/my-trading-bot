@@ -15,6 +15,20 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 # ========================================
 
 app = Flask('')
+
+# 🔥 YE ROOT ROUTE CRON-JOB KE 404 ERROR KO FIX KAREGA
+@app.route('/')
+def home():
+    return "Bot is Running 24/7!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.start()
+
+# ================= GLOBAL VARIABLES =================
 active_trades = {}
 SCAN_TIMEFRAME = "15m"
 EXCHANGE = "binance"  
@@ -27,7 +41,7 @@ def fmt(p):
     try: return f"{float(p):.4f}"
     except: return str(p)
 
-# ---------------- DATA FETCHERS ----------------
+# ================= DATA FETCHERS =================
 def get_ticker():
     global last_ticker_data, last_ticker_time
     now = time.time()
@@ -36,6 +50,7 @@ def get_ticker():
     
     try:
         if EXCHANGE == "binance":
+            # Binance Vision API (Render block fix)
             res = requests.get("https://data-api.binance.vision/api/v3/ticker/24hr", timeout=10)
             if res.status_code == 200:
                 data = res.json()
@@ -44,6 +59,7 @@ def get_ticker():
                 last_ticker_time = now
                 return filtered
         elif EXCHANGE == "coinbase":
+            # Coinbase API
             return [{'symbol': s, 'quoteVolume': 50000000, 'priceChangePercent': 0, 'lastPrice': 0} for s in COINBASE_TOP]
     except Exception as e:
         print(f"{EXCHANGE} Ticker Error:", e)
@@ -72,7 +88,7 @@ def get_kline(sym, interval="15m", limit=200):
         print(f"Kline Exception for {sym}:", e)
     return None
 
-# ---------------- INDICATORS ----------------
+# ================= INDICATORS =================
 def calculate_pro_indicators(df):
     df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
     df['ema12'] = df['close'].ewm(span=12, adjust=False).mean()
@@ -100,9 +116,9 @@ def calculate_pro_indicators(df):
     df['obv_ema'] = df['obv'].ewm(span=20, adjust=False).mean()
     return df
 
-# ---------------- AI ----------------
+# ================= AI ANALYSIS =================
 def get_ai_verdict(symbol, signal, score):
-    prompt = f"Stock: {symbol}, Signal: {signal}, Score: {score}/7. Reply in ONE short sentence."
+    prompt = f"Stock: {symbol}, Signal: {signal}, Score: {score}/7. Reply in ONE short sentence with a strong verdict."
     try:
         if GROQ_API_KEY:
             url = "https://api.groq.com/openai/v1/chat/completions"
@@ -118,7 +134,7 @@ def get_ai_verdict(symbol, signal, score):
     except: pass
     return "AI analysis unavailable."
 
-# ---------------- TELEGRAM ----------------
+# ================= TELEGRAM HELPERS =================
 def send_msg(text, markup=None):
     if not TG_TOKEN: return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
@@ -137,7 +153,7 @@ def send_photo(img, caption, markup=None):
     except: 
         send_msg(caption, markup)
 
-# ---------------- SCANNER ----------------
+# ================= SCANNER =================
 def scan_market(is_manual=False):
     global EXCHANGE
     print(f"[{time.strftime('%H:%M:%S')}] Scanning {EXCHANGE.upper()}...")
@@ -182,7 +198,7 @@ def scan_market(is_manual=False):
             if last['obv'] < last['obv_ema']: sell_score += 1
             
             sig, score = None, 0
-            # RELAXED TO 5/7 FOR AUTO SIGNALS
+            # 5 out of 7 indicators needed
             if buy_score >= 5 and last['close'] > last['open']: 
                 sig, score = "BUY", buy_score
             elif sell_score >= 5 and last['close'] < last['open']: 
@@ -248,7 +264,7 @@ def bot_loop():
         scan_market(False)
         time.sleep(300) # Scan every 5 minutes
 
-# ---------------- MONITOR ----------------
+# ================= MONITOR =================
 def monitor():
     while True:
         try:
@@ -267,7 +283,7 @@ def monitor():
         except: pass
         time.sleep(20)
 
-# ---------------- COMMANDS ----------------
+# ================= COMMANDS =================
 def commands():
     global EXCHANGE
     offset = 0
@@ -320,13 +336,33 @@ def commands():
                                 [{"text": "📊 Active Trades", "callback_data": "trades"}],
                                 [{"text": f"🔄 Switch to {'Coinbase' if EXCHANGE == 'binance' else 'Binance'}", "callback_data": "switch"}]
                             ]}
-                            send_msg(f"👋 <b>Welcome to V60!</b>\nCurrent Exchange: <b>{EXCHANGE.upper()}</b>\n\n✅ <b>Auto-Scan is ON (5/7 Score)</b>", markup)
+                            send_msg(f"👋 <b>Welcome to Final Bot!</b>\nCurrent Exchange: <b>{EXCHANGE.upper()}</b>\n\n✅ <b>Auto-Scan is ON (5/7 Score)</b>", markup)
+                        elif txt == "/top":
+                            data = get_ticker()
+                            if EXCHANGE == "binance":
+                                valid = [{'m': c['symbol'], 'c': float(c.get('priceChangePercent', 0))} for c in data]
+                                top = sorted(valid, key=lambda x: x['c'], reverse=True)[:5]
+                                msg = "🏆 <b>Top Gainers (Binance)</b>\n\n"
+                                for i, c in enumerate(top): msg += f"{i+1}. {c['m'].replace('USDT','')}: {c['c']:+.2f}%\n"
+                                send_msg(msg)
+                            else:
+                                send_msg("⚠️ Top Gainers/Losers is only available for Binance in this version.")
+                        elif txt == "/bottom":
+                            data = get_ticker()
+                            if EXCHANGE == "binance":
+                                valid = [{'m': c['symbol'], 'c': float(c.get('priceChangePercent', 0))} for c in data]
+                                bot = sorted(valid, key=lambda x: x['c'], reverse=False)[:5]
+                                msg = "📉 <b>Top Losers (Binance)</b>\n\n"
+                                for i, c in enumerate(bot): msg += f"{i+1}. {c['m'].replace('USDT','')}: {c['c']:+.2f}%\n"
+                                send_msg(msg)
+                            else:
+                                send_msg("⚠️ Top Gainers/Losers is only available for Binance in this version.")
         except: pass
         time.sleep(2)
 
+# ================= MAIN =================
 if __name__ == "__main__":
-    keep_alive = lambda: Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
-    keep_alive()
+    keep_alive() # Start Web Server (Cronjob fix)
     Thread(target=monitor).start()
     Thread(target=commands).start()
     Thread(target=bot_loop).start()
