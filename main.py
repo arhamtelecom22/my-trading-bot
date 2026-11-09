@@ -7,12 +7,12 @@ from flask import Flask
 from threading import Thread
 import json
 
-# ================= KEYS (WITH STRIP TO REMOVE SPACES) =================
+# ================= KEYS =================
 TG_TOKEN = os.environ.get("TG_TOKEN", "").strip()
 TG_CHAT_ID = "762295473"
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip() 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip() 
-# ========================================================================
+# ========================================
 
 app = Flask('')
 
@@ -128,17 +128,18 @@ def calculate_pro_indicators(df):
     df['obv_ema'] = df['obv'].ewm(span=20, adjust=False).mean()
     return df
 
-# ================= AI ANALYSIS (UPGRADED) =================
+# ================= AI ANALYSIS (FIXED MODELS) =================
 def get_ai_verdict(symbol, signal, score):
     prompt = f"Stock: {symbol}, Signal: {signal}, Score: {score}/7. Reply in ONE short sentence with a strong verdict."
     errors = []
     
-    # Try Groq first
+    # Try Groq with correct model
     if GROQ_API_KEY:
         try:
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-            data = {"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}], "max_tokens": 50}
+            # Using openai/gpt-oss-20b which is available on free tier
+            data = {"model": "openai/gpt-oss-20b", "messages": [{"role": "user", "content": prompt}], "max_tokens": 50}
             res = requests.post(url, headers=headers, json=data, timeout=10)
             res_data = res.json()
             if res.status_code == 200 and 'choices' in res_data:
@@ -148,10 +149,11 @@ def get_ai_verdict(symbol, signal, score):
         except Exception as e:
             errors.append(f"Groq Err: {str(e)}")
             
-    # Try Gemini as backup
+    # Try Gemini with correct model
     if GEMINI_API_KEY:
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+            # Using gemini-2.0-flash which replaces the retired 1.5-flash
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
             data = {"contents": [{"parts": [{"text": prompt}]}]}
             res = requests.post(url, json=data, timeout=10)
             res_data = res.json()
@@ -369,7 +371,7 @@ def commands():
                                 [{"text": "📊 Active Trades", "callback_data": "trades"}],
                                 [{"text": f"🔄 Switch to {'Coinbase' if EXCHANGE == 'binance' else 'Binance'}", "callback_data": "switch"}]
                             ]}
-                            send_msg(f"👋 <b>Welcome to V65!</b>\nExchange: <b>{EXCHANGE.upper()}</b>\n\n✅ Auto-Scan ON\n🤖 <i>Type /testai to check AI</i>", markup)
+                            send_msg(f"👋 <b>Welcome to V66!</b>\nExchange: <b>{EXCHANGE.upper()}</b>\n\n✅ Auto-Scan ON\n🤖 <i>Type /testai to check AI</i>", markup)
                         elif txt == "/testai":
                             send_msg("⏳ Testing AI API...")
                             result = get_ai_verdict("BTC", "BUY", 7)
