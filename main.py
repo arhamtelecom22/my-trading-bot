@@ -16,7 +16,6 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 app = Flask('')
 
-# 🔥 YE ROOT ROUTE CRON-JOB KE 404 ERROR KO FIX KAREGA
 @app.route('/')
 def home():
     return "Bot is Running 24/7!"
@@ -31,7 +30,7 @@ def keep_alive():
 # ================= GLOBAL VARIABLES =================
 active_trades = {}
 SCAN_TIMEFRAME = "15m"
-EXCHANGE = "binance"  
+EXCHANGE = "binance"  # DEFAULT
 last_ticker_data = []
 last_ticker_time = 0
 
@@ -50,16 +49,25 @@ def get_ticker():
     
     try:
         if EXCHANGE == "binance":
-            # Binance Vision API (Render block fix)
-            res = requests.get("https://data-api.binance.vision/api/v3/ticker/24hr", timeout=10)
-            if res.status_code == 200:
-                data = res.json()
-                filtered = [c for c in data if c['symbol'].endswith('USDT')]
-                last_ticker_data = filtered
-                last_ticker_time = now
-                return filtered
+            # Try multiple Binance APIs to avoid Render blocks
+            urls = [
+                "https://api.binance.com/api/v3/ticker/24hr",
+                "https://api1.binance.com/api/v3/ticker/24hr",
+                "https://api2.binance.com/api/v3/ticker/24hr",
+                "https://api3.binance.com/api/v3/ticker/24hr",
+                "https://data-api.binance.vision/api/v3/ticker/24hr"
+            ]
+            for url in urls:
+                try:
+                    res = requests.get(url, timeout=5)
+                    if res.status_code == 200:
+                        data = res.json()
+                        filtered = [c for c in data if c['symbol'].endswith('USDT')]
+                        last_ticker_data = filtered
+                        last_ticker_time = now
+                        return filtered
+                except: pass
         elif EXCHANGE == "coinbase":
-            # Coinbase API
             return [{'symbol': s, 'quoteVolume': 50000000, 'priceChangePercent': 0, 'lastPrice': 0} for s in COINBASE_TOP]
     except Exception as e:
         print(f"{EXCHANGE} Ticker Error:", e)
@@ -68,12 +76,20 @@ def get_ticker():
 def get_kline(sym, interval="15m", limit=200):
     try:
         if EXCHANGE == "binance":
-            url = f"https://data-api.binance.vision/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}"
-            res = requests.get(url, timeout=10).json()
-            if not isinstance(res, list): return None
-            df = pd.DataFrame(res, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'tbbav', 'tbqav', 'ignore'])
-            for col in ['open', 'high', 'low', 'close', 'volume']: df[col] = df[col].astype(float)
-            return df
+            urls = [
+                f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}",
+                f"https://api1.binance.com/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}",
+                f"https://data-api.binance.vision/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}"
+            ]
+            for url in urls:
+                try:
+                    res = requests.get(url, timeout=5).json()
+                    if isinstance(res, list) and len(res) > 0:
+                        df = pd.DataFrame(res, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'tbbav', 'tbqav', 'ignore'])
+                        for col in ['open', 'high', 'low', 'close', 'volume']: df[col] = df[col].astype(float)
+                        return df
+                except: pass
+            return None
             
         elif EXCHANGE == "coinbase":
             granularity = 900 if interval == "15m" else 3600
@@ -85,7 +101,7 @@ def get_kline(sym, interval="15m", limit=200):
             for col in ['open', 'high', 'low', 'close', 'volume']: df[col] = df[col].astype(float)
             return df.tail(limit)
     except Exception as e:
-        print(f"Kline Exception for {sym}:", e)
+        pass
     return None
 
 # ================= INDICATORS =================
@@ -120,18 +136,21 @@ def calculate_pro_indicators(df):
 def get_ai_verdict(symbol, signal, score):
     prompt = f"Stock: {symbol}, Signal: {signal}, Score: {score}/7. Reply in ONE short sentence with a strong verdict."
     try:
-        if GROQ_API_KEY:
+        if GROQ_API_KEY and len(GROQ_API_KEY) > 10:
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
             data = {"model": "llama3-8b-8192", "messages": [{"role": "user", "content": prompt}], "max_tokens": 50}
             res = requests.post(url, headers=headers, json=data, timeout=10).json()
-            return res['choices'][0]['message']['content'].strip()
-        elif GEMINI_API_KEY:
+            if 'choices' in res: return res['choices'][0]['message']['content'].strip()
+            else: print("Groq Error:", res)
+        elif GEMINI_API_KEY and len(GEMINI_API_KEY) > 10:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
             data = {"contents": [{"parts": [{"text": prompt}]}]}
             res = requests.post(url, json=data, timeout=10).json()
-            return res['candidates'][0]['content']['parts'][0]['text'].strip()
-    except: pass
+            if 'candidates' in res: return res['candidates'][0]['content']['parts'][0]['text'].strip()
+            else: print("Gemini Error:", res)
+    except Exception as e:
+        print("AI Exception:", e)
     return "AI analysis unavailable."
 
 # ================= TELEGRAM HELPERS =================
@@ -167,10 +186,12 @@ def scan_market(is_manual=False):
         valid = [c for c in data if float(c.get('quoteVolume', 0)) > 5000000]
         valid = sorted(valid, key=lambda x: float(x.get('quoteVolume', 0)), reverse=True)[:30]
     else:
-        valid = data 
+        valid = data[:10] # Limit Coinbase to top 10 to avoid 16 signals at once
     
     found = 0
     for c in valid:
+        if found >= 5: break # MAX 5 SIGNALS PER SCAN
+        
         sym = c['symbol']
         if sym in active_trades: continue
         
@@ -198,7 +219,6 @@ def scan_market(is_manual=False):
             if last['obv'] < last['obv_ema']: sell_score += 1
             
             sig, score = None, 0
-            # 5 out of 7 indicators needed
             if buy_score >= 5 and last['close'] > last['open']: 
                 sig, score = "BUY", buy_score
             elif sell_score >= 5 and last['close'] < last['open']: 
@@ -248,21 +268,20 @@ def scan_market(is_manual=False):
                 
                 active_trades[sym] = {'type': sig, 'entry': entry, 'sl': sl, 'tp1': tp1}
                 found += 1
-                time.sleep(2)
+                time.sleep(3)
                 
         except Exception as e:
-            print(f"Scan error on {sym}:", e)
             time.sleep(1)
             
     if is_manual:
         send_msg(f"✅ Scan Complete on {EXCHANGE.upper()}. Found {found} signals.")
     else:
-        print(f"Auto Scan Complete. Found {found} signals.")
+        print(f"Auto Scan Complete on {EXCHANGE.upper()}. Found {found} signals.")
 
 def bot_loop():
     while True:
         scan_market(False)
-        time.sleep(300) # Scan every 5 minutes
+        time.sleep(300) 
 
 # ================= MONITOR =================
 def monitor():
@@ -336,7 +355,11 @@ def commands():
                                 [{"text": "📊 Active Trades", "callback_data": "trades"}],
                                 [{"text": f"🔄 Switch to {'Coinbase' if EXCHANGE == 'binance' else 'Binance'}", "callback_data": "switch"}]
                             ]}
-                            send_msg(f"👋 <b>Welcome to Final Bot!</b>\nCurrent Exchange: <b>{EXCHANGE.upper()}</b>\n\n✅ <b>Auto-Scan is ON (5/7 Score)</b>", markup)
+                            send_msg(f"👋 <b>Welcome to V63!</b>\nCurrent Exchange: <b>{EXCHANGE.upper()}</b>\n\n✅ <b>Auto-Scan is ON (5/7 Score)</b>\n🤖 <i>Type /testai to check AI</i>", markup)
+                        elif txt == "/testai":
+                            send_msg("⏳ Testing AI...")
+                            result = get_ai_verdict("BTC", "BUY", 7)
+                            send_msg(f"🤖 <b>AI Test Result:</b>\n{result}")
                         elif txt == "/top":
                             data = get_ticker()
                             if EXCHANGE == "binance":
@@ -362,7 +385,7 @@ def commands():
 
 # ================= MAIN =================
 if __name__ == "__main__":
-    keep_alive() # Start Web Server (Cronjob fix)
+    keep_alive()
     Thread(target=monitor).start()
     Thread(target=commands).start()
     Thread(target=bot_loop).start()
