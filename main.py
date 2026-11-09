@@ -7,12 +7,12 @@ from flask import Flask
 from threading import Thread
 import json
 
-# ================= KEYS =================
-TG_TOKEN = os.environ.get("TG_TOKEN")
+# ================= KEYS (WITH STRIP TO REMOVE SPACES) =================
+TG_TOKEN = os.environ.get("TG_TOKEN", "").strip()
 TG_CHAT_ID = "762295473"
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY") 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") 
-# ========================================
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip() 
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip() 
+# ========================================================================
 
 app = Flask('')
 
@@ -30,7 +30,7 @@ def keep_alive():
 # ================= GLOBAL VARIABLES =================
 active_trades = {}
 SCAN_TIMEFRAME = "15m"
-EXCHANGE = "binance"  # DEFAULT
+EXCHANGE = "binance"  
 last_ticker_data = []
 last_ticker_time = 0
 
@@ -49,7 +49,6 @@ def get_ticker():
     
     try:
         if EXCHANGE == "binance":
-            # Try multiple Binance APIs to avoid Render blocks
             urls = [
                 "https://api.binance.com/api/v3/ticker/24hr",
                 "https://api1.binance.com/api/v3/ticker/24hr",
@@ -132,25 +131,33 @@ def calculate_pro_indicators(df):
     df['obv_ema'] = df['obv'].ewm(span=20, adjust=False).mean()
     return df
 
-# ================= AI ANALYSIS =================
+# ================= AI ANALYSIS WITH LOGGING =================
 def get_ai_verdict(symbol, signal, score):
     prompt = f"Stock: {symbol}, Signal: {signal}, Score: {score}/7. Reply in ONE short sentence with a strong verdict."
     try:
-        if GROQ_API_KEY and len(GROQ_API_KEY) > 10:
+        if GROQ_API_KEY:
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
             data = {"model": "llama3-8b-8192", "messages": [{"role": "user", "content": prompt}], "max_tokens": 50}
             res = requests.post(url, headers=headers, json=data, timeout=10).json()
-            if 'choices' in res: return res['choices'][0]['message']['content'].strip()
-            else: print("Groq Error:", res)
-        elif GEMINI_API_KEY and len(GEMINI_API_KEY) > 10:
+            
+            if 'choices' in res: 
+                return res['choices'][0]['message']['content'].strip()
+            else: 
+                print("❌ GROQ API ERROR:", res)
+                
+        elif GEMINI_API_KEY:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
             data = {"contents": [{"parts": [{"text": prompt}]}]}
             res = requests.post(url, json=data, timeout=10).json()
-            if 'candidates' in res: return res['candidates'][0]['content']['parts'][0]['text'].strip()
-            else: print("Gemini Error:", res)
+            
+            if 'candidates' in res: 
+                return res['candidates'][0]['content']['parts'][0]['text'].strip()
+            else: 
+                print("❌ GEMINI API ERROR:", res)
+                
     except Exception as e:
-        print("AI Exception:", e)
+        print("❌ AI EXCEPTION:", e)
     return "AI analysis unavailable."
 
 # ================= TELEGRAM HELPERS =================
@@ -186,11 +193,11 @@ def scan_market(is_manual=False):
         valid = [c for c in data if float(c.get('quoteVolume', 0)) > 5000000]
         valid = sorted(valid, key=lambda x: float(x.get('quoteVolume', 0)), reverse=True)[:30]
     else:
-        valid = data[:10] # Limit Coinbase to top 10 to avoid 16 signals at once
+        valid = data[:10]
     
     found = 0
     for c in valid:
-        if found >= 5: break # MAX 5 SIGNALS PER SCAN
+        if found >= 5: break 
         
         sym = c['symbol']
         if sym in active_trades: continue
@@ -355,7 +362,7 @@ def commands():
                                 [{"text": "📊 Active Trades", "callback_data": "trades"}],
                                 [{"text": f"🔄 Switch to {'Coinbase' if EXCHANGE == 'binance' else 'Binance'}", "callback_data": "switch"}]
                             ]}
-                            send_msg(f"👋 <b>Welcome to V63!</b>\nCurrent Exchange: <b>{EXCHANGE.upper()}</b>\n\n✅ <b>Auto-Scan is ON (5/7 Score)</b>\n🤖 <i>Type /testai to check AI</i>", markup)
+                            send_msg(f"👋 <b>Welcome to V64!</b>\nExchange: <b>{EXCHANGE.upper()}</b>\n\n✅ Auto-Scan ON\n🤖 <i>Type /testai to check AI</i>", markup)
                         elif txt == "/testai":
                             send_msg("⏳ Testing AI...")
                             result = get_ai_verdict("BTC", "BUY", 7)
@@ -369,17 +376,7 @@ def commands():
                                 for i, c in enumerate(top): msg += f"{i+1}. {c['m'].replace('USDT','')}: {c['c']:+.2f}%\n"
                                 send_msg(msg)
                             else:
-                                send_msg("⚠️ Top Gainers/Losers is only available for Binance in this version.")
-                        elif txt == "/bottom":
-                            data = get_ticker()
-                            if EXCHANGE == "binance":
-                                valid = [{'m': c['symbol'], 'c': float(c.get('priceChangePercent', 0))} for c in data]
-                                bot = sorted(valid, key=lambda x: x['c'], reverse=False)[:5]
-                                msg = "📉 <b>Top Losers (Binance)</b>\n\n"
-                                for i, c in enumerate(bot): msg += f"{i+1}. {c['m'].replace('USDT','')}: {c['c']:+.2f}%\n"
-                                send_msg(msg)
-                            else:
-                                send_msg("⚠️ Top Gainers/Losers is only available for Binance in this version.")
+                                send_msg("⚠️ Top Gainers/Losers only for Binance.")
         except: pass
         time.sleep(2)
 
