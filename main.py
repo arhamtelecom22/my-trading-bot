@@ -128,41 +128,39 @@ def calculate_pro_indicators(df):
     df['obv_ema'] = df['obv'].ewm(span=20, adjust=False).mean()
     return df
 
-# ================= AI ANALYSIS (FIXED MODELS) =================
+# ================= AI ANALYSIS (FIXED MODELS & TIMEOUT) =================
 def get_ai_verdict(symbol, signal, score):
     prompt = f"Stock: {symbol}, Signal: {signal}, Score: {score}/7. Reply in ONE short sentence with a strong verdict."
     errors = []
     
-    # Try Groq with correct model
+    # Try Groq first (Using openai/gpt-oss-20b, as llama-3.1-8b-instant is retired)
     if GROQ_API_KEY:
         try:
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-            # Using openai/gpt-oss-20b which is available on free tier
             data = {"model": "openai/gpt-oss-20b", "messages": [{"role": "user", "content": prompt}], "max_tokens": 50}
-            res = requests.post(url, headers=headers, json=data, timeout=10)
+            res = requests.post(url, headers=headers, json=data, timeout=15)
             res_data = res.json()
             if res.status_code == 200 and 'choices' in res_data:
                 return res_data['choices'][0]['message']['content'].strip()
             else:
                 errors.append(f"Groq: {res_data.get('error', {}).get('message', 'Unknown Error')}")
         except Exception as e:
-            errors.append(f"Groq Err: {str(e)}")
+            errors.append(f"Groq Timeout/Err: {str(e)}")
             
-    # Try Gemini with correct model
+    # Try Gemini as backup (Using gemini-2.0-flash)
     if GEMINI_API_KEY:
         try:
-            # Using gemini-2.0-flash which replaces the retired 1.5-flash
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
             data = {"contents": [{"parts": [{"text": prompt}]}]}
-            res = requests.post(url, json=data, timeout=10)
+            res = requests.post(url, json=data, timeout=15)
             res_data = res.json()
             if res.status_code == 200 and 'candidates' in res_data:
                 return res_data['candidates'][0]['content']['parts'][0]['text'].strip()
             else:
                 errors.append(f"Gemini: {res_data.get('error', {}).get('message', 'Unknown Error')}")
         except Exception as e:
-            errors.append(f"Gemini Err: {str(e)}")
+            errors.append(f"Gemini Timeout/Err: {str(e)}")
             
     if not GROQ_API_KEY and not GEMINI_API_KEY:
         return "AI Error: No API Keys found in Render."
@@ -371,7 +369,7 @@ def commands():
                                 [{"text": "📊 Active Trades", "callback_data": "trades"}],
                                 [{"text": f"🔄 Switch to {'Coinbase' if EXCHANGE == 'binance' else 'Binance'}", "callback_data": "switch"}]
                             ]}
-                            send_msg(f"👋 <b>Welcome to V66!</b>\nExchange: <b>{EXCHANGE.upper()}</b>\n\n✅ Auto-Scan ON\n🤖 <i>Type /testai to check AI</i>", markup)
+                            send_msg(f"👋 <b>Welcome to V67!</b>\nExchange: <b>{EXCHANGE.upper()}</b>\n\n✅ Auto-Scan ON\n🤖 <i>Type /testai to check AI</i>", markup)
                         elif txt == "/testai":
                             send_msg("⏳ Testing AI API...")
                             result = get_ai_verdict("BTC", "BUY", 7)
