@@ -17,40 +17,59 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 app = Flask('')
 active_trades = {}
 SCAN_TIMEFRAME = "15m"
+EXCHANGE = "binance"  
 last_ticker_data = []
 last_ticker_time = 0
+
+COINBASE_TOP = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "ADA-USD", "AVAX-USD", "LINK-USD", "DOT-USD", "DOGE-USD", "SHIB-USD", "LTC-USD", "BCH-USD", "MATIC-USD", "UNI-USD", "ATOM-USD", "ETC-USD", "XLM-USD", "NEAR-USD", "APT-USD", "ARB-USD"]
 
 def fmt(p):
     try: return f"{float(p):.4f}"
     except: return str(p)
 
-# ---------------- BINANCE DATA ----------------
-def get_binance_ticker():
+# ---------------- DATA FETCHERS ----------------
+def get_ticker():
     global last_ticker_data, last_ticker_time
     now = time.time()
     if last_ticker_data and (now - last_ticker_time < 60):
         return last_ticker_data
+    
     try:
-        res = requests.get("https://api.binance.com/api/v3/ticker/24hr", timeout=10)
-        if res.status_code == 200:
-            data = res.json()
-            filtered = [c for c in data if c['symbol'].endswith('USDT')]
-            last_ticker_data = filtered
-            last_ticker_time = now
-            return filtered
-    except: pass
+        if EXCHANGE == "binance":
+            res = requests.get("https://data-api.binance.vision/api/v3/ticker/24hr", timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                filtered = [c for c in data if c['symbol'].endswith('USDT')]
+                last_ticker_data = filtered
+                last_ticker_time = now
+                return filtered
+        elif EXCHANGE == "coinbase":
+            return [{'symbol': s, 'quoteVolume': 50000000, 'priceChangePercent': 0, 'lastPrice': 0} for s in COINBASE_TOP]
+    except Exception as e:
+        print(f"{EXCHANGE} Ticker Error:", e)
     return last_ticker_data if last_ticker_data else []
 
-def get_binance_kline(sym, interval="15m", limit=200):
+def get_kline(sym, interval="15m", limit=200):
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}"
-        res = requests.get(url, timeout=10).json()
-        if not isinstance(res, list): return None
-        
-        df = pd.DataFrame(res, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'tbbav', 'tbqav', 'ignore'])
-        for col in ['open', 'high', 'low', 'close', 'volume']: df[col] = df[col].astype(float)
-        return df
-    except: pass
+        if EXCHANGE == "binance":
+            url = f"https://data-api.binance.vision/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}"
+            res = requests.get(url, timeout=10).json()
+            if not isinstance(res, list): return None
+            df = pd.DataFrame(res, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'tbbav', 'tbqav', 'ignore'])
+            for col in ['open', 'high', 'low', 'close', 'volume']: df[col] = df[col].astype(float)
+            return df
+            
+        elif EXCHANGE == "coinbase":
+            granularity = 900 if interval == "15m" else 3600
+            url = f"https://api.exchange.coinbase.com/products/{sym}/candles?granularity={granularity}"
+            res = requests.get(url, timeout=10).json()
+            if not isinstance(res, list): return None
+            df = pd.DataFrame(res, columns=['time', 'low', 'high', 'open', 'close', 'volume'])
+            df = df.iloc[::-1].reset_index(drop=True)
+            for col in ['open', 'high', 'low', 'close', 'volume']: df[col] = df[col].astype(float)
+            return df.tail(limit)
+    except Exception as e:
+        print(f"Kline Exception for {sym}:", e)
     return None
 
 # ---------------- INDICATORS ----------------
@@ -81,9 +100,9 @@ def calculate_pro_indicators(df):
     df['obv_ema'] = df['obv'].ewm(span=20, adjust=False).mean()
     return df
 
-# ---------------- AI ANALYSIS ----------------
+# ---------------- AI ----------------
 def get_ai_verdict(symbol, signal, score):
-    prompt = f"Stock: {symbol}, Signal: {signal}, Score: {score}/7. Reply in ONE short sentence with a strong verdict."
+    prompt = f"Stock: {symbol}, Signal: {signal}, Score: {score}/7. Reply in ONE short sentence."
     try:
         if GROQ_API_KEY:
             url = "https://api.groq.com/openai/v1/chat/completions"
@@ -120,14 +139,19 @@ def send_photo(img, caption, markup=None):
 
 # ---------------- SCANNER ----------------
 def scan_market(is_manual=False):
-    print("Scanning Binance...")
-    data = get_binance_ticker()
+    global EXCHANGE
+    print(f"[{time.strftime('%H:%M:%S')}] Scanning {EXCHANGE.upper()}...")
+    data = get_ticker()
     if not data: 
-        if is_manual: send_msg("❌ Failed to fetch data from Binance.")
+        if is_manual: send_msg(f"❌ Failed to fetch data from {EXCHANGE}.")
         return
     
-    valid = [c for c in data if float(c.get('quoteVolume', 0)) > 10000000]
-    valid = sorted(valid, key=lambda x: float(x.get('quoteVolume', 0)), reverse=True)[:30]
+    valid = []
+    if EXCHANGE == "binance":
+        valid = [c for c in data if float(c.get('quoteVolume', 0)) > 5000000]
+        valid = sorted(valid, key=lambda x: float(x.get('quoteVolume', 0)), reverse=True)[:30]
+    else:
+        valid = data 
     
     found = 0
     for c in valid:
@@ -135,7 +159,7 @@ def scan_market(is_manual=False):
         if sym in active_trades: continue
         
         try:
-            df = get_binance_kline(sym, "15m", 200)
+            df = get_kline(sym, "15m", 200)
             if df is None or len(df) < 200: continue
             
             df = calculate_pro_indicators(df)
@@ -158,9 +182,10 @@ def scan_market(is_manual=False):
             if last['obv'] < last['obv_ema']: sell_score += 1
             
             sig, score = None, 0
-            if buy_score >= 6 and last['close'] > last['open']: 
+            # RELAXED TO 5/7 FOR AUTO SIGNALS
+            if buy_score >= 5 and last['close'] > last['open']: 
                 sig, score = "BUY", buy_score
-            elif sell_score >= 6 and last['close'] < last['open']: 
+            elif sell_score >= 5 and last['close'] < last['open']: 
                 sig, score = "SELL", sell_score
                 
             if sig:
@@ -171,20 +196,19 @@ def scan_market(is_manual=False):
                 else:
                     sl, tp1, tp2, tp3 = entry + risk, entry - (risk*2), entry - (risk*3), entry - (risk*4)
                     
-                clean_sym = sym.replace("USDT", "")
-                
-                # Fetch AI Verdict
+                clean_sym = sym.replace("USDT", "").replace("-USD", "")
                 ai_text = get_ai_verdict(clean_sym, sig, score)
                 
                 text = (
-                    f"<b>🔥 #{clean_sym} {sig} (PRO)</b>\n\n"
+                    f"<b>🔥 #{clean_sym} {sig} ({EXCHANGE.upper()})</b>\n\n"
                     f"Entry: {fmt(entry)}\nSL: {fmt(sl)}\nTP1: {fmt(tp1)}\nTP2: {fmt(tp2)}\nTP3: {fmt(tp3)}\n\n"
                     f"📊 <b>Confluence:</b> {score}/7\n"
                     f"🤖 <b>AI:</b> <i>{ai_text}</i>\n"
                     f"⏱ TF: 15m"
                 )
                 
-                markup = {"inline_keyboard": [[{"text": f"📋 Copy", "copy_text": {"text": clean_sym}}], [{"text": "📈 Open Binance", "url": f"https://www.binance.com/en/trade/{clean_sym}_USDT?type=spot"}], [{"text": "❌ Close", "callback_data": f"close_{sym}"}]]}
+                url_link = f"https://www.binance.com/en/trade/{clean_sym}_USDT?type=spot" if EXCHANGE == "binance" else f"https://www.coinbase.com/advanced-trade/spot/{clean_sym}-USD"
+                markup = {"inline_keyboard": [[{"text": f"📋 Copy", "copy_text": {"text": clean_sym}}], [{"text": f"📈 Open {EXCHANGE.capitalize()}", "url": url_link}], [{"text": "❌ Close", "callback_data": f"close_{sym}"}]]}
                 
                 send_msg(text, markup)
                 
@@ -215,33 +239,37 @@ def scan_market(is_manual=False):
             time.sleep(1)
             
     if is_manual:
-        send_msg(f"✅ Scan Complete. Found {found} signals.")
+        send_msg(f"✅ Scan Complete on {EXCHANGE.upper()}. Found {found} signals.")
+    else:
+        print(f"Auto Scan Complete. Found {found} signals.")
 
 def bot_loop():
     while True:
         scan_market(False)
-        time.sleep(300)
+        time.sleep(300) # Scan every 5 minutes
 
 # ---------------- MONITOR ----------------
 def monitor():
     while True:
         try:
-            data = get_binance_ticker()
-            prices = {t['symbol']: float(t['lastPrice']) for t in data}
-            for sym, t in list(active_trades.items()):
-                if sym in prices:
-                    p = prices[sym]
-                    if (t['type'] == "BUY" and p <= t['sl']) or (t['type'] == "SELL" and p >= t['sl']):
-                        send_msg(f"❌ <b>{sym.replace('USDT','')} Hit STOP LOSS</b>\nPrice: {fmt(p)}")
-                        del active_trades[sym]
-                    elif (t['type'] == "BUY" and p >= t['tp1']) or (t['type'] == "SELL" and p <= t['tp1']):
-                        send_msg(f"✅ <b>{sym.replace('USDT','')} Hit TP1</b>\nPrice: {fmt(p)}")
-                        del active_trades[sym]
+            if EXCHANGE == "binance":
+                data = get_ticker()
+                prices = {t['symbol']: float(t['lastPrice']) for t in data}
+                for sym, t in list(active_trades.items()):
+                    if sym in prices:
+                        p = prices[sym]
+                        if (t['type'] == "BUY" and p <= t['sl']) or (t['type'] == "SELL" and p >= t['sl']):
+                            send_msg(f"❌ <b>{sym.replace('USDT','')} Hit STOP LOSS</b>\nPrice: {fmt(p)}")
+                            del active_trades[sym]
+                        elif (t['type'] == "BUY" and p >= t['tp1']) or (t['type'] == "SELL" and p <= t['tp1']):
+                            send_msg(f"✅ <b>{sym.replace('USDT','')} Hit TP1</b>\nPrice: {fmt(p)}")
+                            del active_trades[sym]
         except: pass
         time.sleep(20)
 
 # ---------------- COMMANDS ----------------
 def commands():
+    global EXCHANGE
     offset = 0
     while True:
         try:
@@ -261,14 +289,23 @@ def commands():
                                 if sym in active_trades: del active_trades[sym]
                                 send_msg(f"🛑 Trade Manually Closed.")
                             elif txt == "scan":
-                                send_msg("⏳ Manual scan on Binance starting...")
+                                send_msg(f"⏳ Manual scan on {EXCHANGE.upper()} starting...")
                                 Thread(target=scan_market, args=(True,)).start()
                             elif txt == "trades":
                                 if not active_trades: send_msg("💤 No active trades.")
                                 else:
                                     for s, t in active_trades.items():
-                                        send_msg(f"🪙 <b>{s.replace('USDT','')}</b> ({t['type']})\nEntry: {fmt(t['entry'])}", {"inline_keyboard": [[{"text": "❌ Close", "callback_data": f"close_{s}"}]]})
+                                        send_msg(f"🪙 <b>{s.replace('USDT','').replace('-USD','')}</b> ({t['type']})\nEntry: {fmt(t['entry'])}", {"inline_keyboard": [[{"text": "❌ Close", "callback_data": f"close_{s}"}]]})
                                         time.sleep(0.5)
+                            elif txt == "switch":
+                                EXCHANGE = "coinbase" if EXCHANGE == "binance" else "binance"
+                                send_msg(f"🔄 <b>Exchange Switched to {EXCHANGE.upper()}</b>")
+                                markup = {"inline_keyboard": [
+                                    [{"text": "🚀 SCAN NOW", "callback_data": "scan"}], 
+                                    [{"text": "📊 Active Trades", "callback_data": "trades"}],
+                                    [{"text": f"🔄 Switch to {'Coinbase' if EXCHANGE == 'binance' else 'Binance'}", "callback_data": "switch"}]
+                                ]}
+                                send_msg(f"Current Exchange: <b>{EXCHANGE.upper()}</b>", markup)
                         
                         requests.get(f"https://api.telegram.org/bot{TG_TOKEN}/answerCallbackQuery?callback_query_id={cb_id}")
                         continue
@@ -278,22 +315,12 @@ def commands():
                     
                     if str(cid) == str(TG_CHAT_ID):
                         if txt in ["/start", "/menu"]:
-                            markup = {"inline_keyboard": [[{"text": "🚀 SCAN NOW (Binance)", "callback_data": "scan"}], [{"text": "📊 Active Trades", "callback_data": "trades"}]]}
-                            send_msg("👋 <b>Welcome to V57 (Binance + AI)!</b>", markup)
-                        elif txt == "/top":
-                            data = get_binance_ticker()
-                            valid = [{'m': c['symbol'], 'c': float(c.get('priceChangePercent', 0))} for c in data]
-                            top = sorted(valid, key=lambda x: x['c'], reverse=True)[:5]
-                            msg = "🏆 <b>Top Gainers</b>\n\n"
-                            for i, c in enumerate(top): msg += f"{i+1}. {c['m'].replace('USDT','')}: {c['c']:+.2f}%\n"
-                            send_msg(msg)
-                        elif txt == "/bottom":
-                            data = get_binance_ticker()
-                            valid = [{'m': c['symbol'], 'c': float(c.get('priceChangePercent', 0))} for c in data]
-                            bot = sorted(valid, key=lambda x: x['c'], reverse=False)[:5]
-                            msg = "📉 <b>Top Losers</b>\n\n"
-                            for i, c in enumerate(bot): msg += f"{i+1}. {c['m'].replace('USDT','')}: {c['c']:+.2f}%\n"
-                            send_msg(msg)
+                            markup = {"inline_keyboard": [
+                                [{"text": "🚀 SCAN NOW", "callback_data": "scan"}], 
+                                [{"text": "📊 Active Trades", "callback_data": "trades"}],
+                                [{"text": f"🔄 Switch to {'Coinbase' if EXCHANGE == 'binance' else 'Binance'}", "callback_data": "switch"}]
+                            ]}
+                            send_msg(f"👋 <b>Welcome to V60!</b>\nCurrent Exchange: <b>{EXCHANGE.upper()}</b>\n\n✅ <b>Auto-Scan is ON (5/7 Score)</b>", markup)
         except: pass
         time.sleep(2)
 
