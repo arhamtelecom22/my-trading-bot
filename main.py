@@ -52,8 +52,6 @@ def get_ticker():
             urls = [
                 "https://api.binance.com/api/v3/ticker/24hr",
                 "https://api1.binance.com/api/v3/ticker/24hr",
-                "https://api2.binance.com/api/v3/ticker/24hr",
-                "https://api3.binance.com/api/v3/ticker/24hr",
                 "https://data-api.binance.vision/api/v3/ticker/24hr"
             ]
             for url in urls:
@@ -77,7 +75,6 @@ def get_kline(sym, interval="15m", limit=200):
         if EXCHANGE == "binance":
             urls = [
                 f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}",
-                f"https://api1.binance.com/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}",
                 f"https://data-api.binance.vision/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}"
             ]
             for url in urls:
@@ -131,34 +128,44 @@ def calculate_pro_indicators(df):
     df['obv_ema'] = df['obv'].ewm(span=20, adjust=False).mean()
     return df
 
-# ================= AI ANALYSIS WITH LOGGING =================
+# ================= AI ANALYSIS (UPGRADED) =================
 def get_ai_verdict(symbol, signal, score):
     prompt = f"Stock: {symbol}, Signal: {signal}, Score: {score}/7. Reply in ONE short sentence with a strong verdict."
-    try:
-        if GROQ_API_KEY:
+    errors = []
+    
+    # Try Groq first
+    if GROQ_API_KEY:
+        try:
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-            data = {"model": "llama3-8b-8192", "messages": [{"role": "user", "content": prompt}], "max_tokens": 50}
-            res = requests.post(url, headers=headers, json=data, timeout=10).json()
+            data = {"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}], "max_tokens": 50}
+            res = requests.post(url, headers=headers, json=data, timeout=10)
+            res_data = res.json()
+            if res.status_code == 200 and 'choices' in res_data:
+                return res_data['choices'][0]['message']['content'].strip()
+            else:
+                errors.append(f"Groq: {res_data.get('error', {}).get('message', 'Unknown Error')}")
+        except Exception as e:
+            errors.append(f"Groq Err: {str(e)}")
             
-            if 'choices' in res: 
-                return res['choices'][0]['message']['content'].strip()
-            else: 
-                print("❌ GROQ API ERROR:", res)
-                
-        elif GEMINI_API_KEY:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+    # Try Gemini as backup
+    if GEMINI_API_KEY:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
             data = {"contents": [{"parts": [{"text": prompt}]}]}
-            res = requests.post(url, json=data, timeout=10).json()
+            res = requests.post(url, json=data, timeout=10)
+            res_data = res.json()
+            if res.status_code == 200 and 'candidates' in res_data:
+                return res_data['candidates'][0]['content']['parts'][0]['text'].strip()
+            else:
+                errors.append(f"Gemini: {res_data.get('error', {}).get('message', 'Unknown Error')}")
+        except Exception as e:
+            errors.append(f"Gemini Err: {str(e)}")
             
-            if 'candidates' in res: 
-                return res['candidates'][0]['content']['parts'][0]['text'].strip()
-            else: 
-                print("❌ GEMINI API ERROR:", res)
-                
-    except Exception as e:
-        print("❌ AI EXCEPTION:", e)
-    return "AI analysis unavailable."
+    if not GROQ_API_KEY and not GEMINI_API_KEY:
+        return "AI Error: No API Keys found in Render."
+        
+    return f"AI Failed: {' | '.join(errors)}"
 
 # ================= TELEGRAM HELPERS =================
 def send_msg(text, markup=None):
@@ -193,7 +200,7 @@ def scan_market(is_manual=False):
         valid = [c for c in data if float(c.get('quoteVolume', 0)) > 5000000]
         valid = sorted(valid, key=lambda x: float(x.get('quoteVolume', 0)), reverse=True)[:30]
     else:
-        valid = data[:10]
+        valid = data[:10] 
     
     found = 0
     for c in valid:
@@ -362,21 +369,11 @@ def commands():
                                 [{"text": "📊 Active Trades", "callback_data": "trades"}],
                                 [{"text": f"🔄 Switch to {'Coinbase' if EXCHANGE == 'binance' else 'Binance'}", "callback_data": "switch"}]
                             ]}
-                            send_msg(f"👋 <b>Welcome to V64!</b>\nExchange: <b>{EXCHANGE.upper()}</b>\n\n✅ Auto-Scan ON\n🤖 <i>Type /testai to check AI</i>", markup)
+                            send_msg(f"👋 <b>Welcome to V65!</b>\nExchange: <b>{EXCHANGE.upper()}</b>\n\n✅ Auto-Scan ON\n🤖 <i>Type /testai to check AI</i>", markup)
                         elif txt == "/testai":
-                            send_msg("⏳ Testing AI...")
+                            send_msg("⏳ Testing AI API...")
                             result = get_ai_verdict("BTC", "BUY", 7)
                             send_msg(f"🤖 <b>AI Test Result:</b>\n{result}")
-                        elif txt == "/top":
-                            data = get_ticker()
-                            if EXCHANGE == "binance":
-                                valid = [{'m': c['symbol'], 'c': float(c.get('priceChangePercent', 0))} for c in data]
-                                top = sorted(valid, key=lambda x: x['c'], reverse=True)[:5]
-                                msg = "🏆 <b>Top Gainers (Binance)</b>\n\n"
-                                for i, c in enumerate(top): msg += f"{i+1}. {c['m'].replace('USDT','')}: {c['c']:+.2f}%\n"
-                                send_msg(msg)
-                            else:
-                                send_msg("⚠️ Top Gainers/Losers only for Binance.")
         except: pass
         time.sleep(2)
 
