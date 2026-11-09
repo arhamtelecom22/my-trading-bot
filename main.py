@@ -34,7 +34,6 @@ def get_binance_ticker():
         res = requests.get("https://api.binance.com/api/v3/ticker/24hr", timeout=10)
         if res.status_code == 200:
             data = res.json()
-            # Filter USDT pairs and format
             filtered = [c for c in data if c['symbol'].endswith('USDT')]
             last_ticker_data = filtered
             last_ticker_time = now
@@ -82,6 +81,24 @@ def calculate_pro_indicators(df):
     df['obv_ema'] = df['obv'].ewm(span=20, adjust=False).mean()
     return df
 
+# ---------------- AI ANALYSIS ----------------
+def get_ai_verdict(symbol, signal, score):
+    prompt = f"Stock: {symbol}, Signal: {signal}, Score: {score}/7. Reply in ONE short sentence with a strong verdict."
+    try:
+        if GROQ_API_KEY:
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+            data = {"model": "llama3-8b-8192", "messages": [{"role": "user", "content": prompt}], "max_tokens": 50}
+            res = requests.post(url, headers=headers, json=data, timeout=10).json()
+            return res['choices'][0]['message']['content'].strip()
+        elif GEMINI_API_KEY:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+            data = {"contents": [{"parts": [{"text": prompt}]}]}
+            res = requests.post(url, json=data, timeout=10).json()
+            return res['candidates'][0]['content']['parts'][0]['text'].strip()
+    except: pass
+    return "AI analysis unavailable."
+
 # ---------------- TELEGRAM ----------------
 def send_msg(text, markup=None):
     if not TG_TOKEN: return
@@ -109,7 +126,6 @@ def scan_market(is_manual=False):
         if is_manual: send_msg("❌ Failed to fetch data from Binance.")
         return
     
-    # Get top 30 by volume
     valid = [c for c in data if float(c.get('quoteVolume', 0)) > 10000000]
     valid = sorted(valid, key=lambda x: float(x.get('quoteVolume', 0)), reverse=True)[:30]
     
@@ -157,19 +173,21 @@ def scan_market(is_manual=False):
                     
                 clean_sym = sym.replace("USDT", "")
                 
+                # Fetch AI Verdict
+                ai_text = get_ai_verdict(clean_sym, sig, score)
+                
                 text = (
                     f"<b>🔥 #{clean_sym} {sig} (PRO)</b>\n\n"
                     f"Entry: {fmt(entry)}\nSL: {fmt(sl)}\nTP1: {fmt(tp1)}\nTP2: {fmt(tp2)}\nTP3: {fmt(tp3)}\n\n"
                     f"📊 <b>Confluence:</b> {score}/7\n"
+                    f"🤖 <b>AI:</b> <i>{ai_text}</i>\n"
                     f"⏱ TF: 15m"
                 )
                 
                 markup = {"inline_keyboard": [[{"text": f"📋 Copy", "copy_text": {"text": clean_sym}}], [{"text": "📈 Open Binance", "url": f"https://www.binance.com/en/trade/{clean_sym}_USDT?type=spot"}], [{"text": "❌ Close", "callback_data": f"close_{sym}"}]]}
                 
-                # Send text FIRST
                 send_msg(text, markup)
                 
-                # Try Chart
                 try:
                     df_chart = df.tail(30)
                     c_data = [{"x": str(i), "o": float(r.open), "h": float(r.high), "l": float(r.low), "c": float(r.close)} for i, r in enumerate(df_chart.itertuples())]
@@ -261,7 +279,7 @@ def commands():
                     if str(cid) == str(TG_CHAT_ID):
                         if txt in ["/start", "/menu"]:
                             markup = {"inline_keyboard": [[{"text": "🚀 SCAN NOW (Binance)", "callback_data": "scan"}], [{"text": "📊 Active Trades", "callback_data": "trades"}]]}
-                            send_msg("👋 <b>Welcome to V56 (Binance Data)!</b>\nBot is scanning the best Binance pairs.", markup)
+                            send_msg("👋 <b>Welcome to V57 (Binance + AI)!</b>", markup)
                         elif txt == "/top":
                             data = get_binance_ticker()
                             valid = [{'m': c['symbol'], 'c': float(c.get('priceChangePercent', 0))} for c in data]
