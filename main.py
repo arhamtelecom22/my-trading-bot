@@ -16,7 +16,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "All-in-One Master Bot is Running 24/7!"
+    return "SMC Master Bot is Running 24/7!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -30,7 +30,6 @@ active_trades = {}
 last_ticker_data = []
 last_ticker_time = 0
 
-# Lists for different markets
 COINBASE_TOP = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "ADA-USD", "AVAX-USD", "LINK-USD"]
 STOCK_TOP = {"^NSEI": "NIFTY 50", "^BSESN": "SENSEX", "RELIANCE.NS": "RELIANCE", "TCS.NS": "TCS", "HDFCBANK.NS": "HDFC BANK", "AAPL": "APPLE", "MSFT": "MICROSOFT", "NVDA": "NVIDIA"}
 COMMODITY_TOP = {"GC=F": "GOLD", "SI=F": "SILVER", "CL=F": "CRUDE OIL", "HG=F": "COPPER"}
@@ -45,7 +44,6 @@ def get_coindcx_ticker():
     now = time.time()
     if last_ticker_data and (now - last_ticker_time < 60):
         return last_ticker_data
-    
     try:
         res = requests.get("https://api.coindcx.com/exchange/ticker", timeout=10)
         if res.status_code == 200:
@@ -56,11 +54,11 @@ def get_coindcx_ticker():
     except: pass
     return last_ticker_data if last_ticker_data else []
 
-def get_kline(sym, market_type):
+def get_kline(sym, market_type, interval="15m", limit=200):
     try:
         if market_type == "coindcx":
             c_sym = sym if '_' in sym else 'B-' + sym.replace('USDT', '_USDT')
-            url = f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval=15m&limit=200"
+            url = f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval={interval}&limit={limit}"
             res = requests.get(url, timeout=10).json()
             if isinstance(res, list):
                 res.reverse()
@@ -69,16 +67,18 @@ def get_kline(sym, market_type):
                 return df
                 
         elif market_type == "coinbase":
-            url = f"https://api.exchange.coinbase.com/products/{sym}/candles?granularity=900"
+            gran = 900 if interval == "15m" else 3600
+            url = f"https://api.exchange.coinbase.com/products/{sym}/candles?granularity={gran}"
             res = requests.get(url, timeout=10).json()
             if isinstance(res, list):
                 df = pd.DataFrame(res, columns=['time', 'low', 'high', 'open', 'close', 'volume'])
                 df = df.iloc[::-1].reset_index(drop=True)
                 for col in ['open', 'high', 'low', 'close', 'volume']: df[col] = df[col].astype(float)
-                return df.tail(200)
+                return df.tail(limit)
                 
         elif market_type in ["stocks", "commodities"]:
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=15m&range=5d"
+            y_range = "5d" if interval == "15m" else "1mo"
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval={interval}&range={y_range}"
             res = requests.get(url, timeout=10).json()
             result = res['chart']['result'][0]
             timestamps = result['timestamp']
@@ -98,133 +98,199 @@ def get_kline(sym, market_type):
     except: pass
     return None
 
-# ================= INDICATORS =================
+# ================= SMC INDICATORS =================
 def calculate_indicators(df):
+    # Trend & Volatility
     df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
-    
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['rsi'] = 100 - (100 / (1 + rs))
-    
-    df['ema12'] = df['close'].ewm(span=12, adjust=False).mean()
-    df['ema26'] = df['close'].ewm(span=26, adjust=False).mean()
-    df['macd'] = df['ema12'] - df['ema26']
-    df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
-    
     df['atr'] = (df['high'] - df['low']).rolling(window=14).mean()
     return df
 
+def calculate_smc(df):
+    # 1. Swing Highs & Lows (Liquidity Pools)
+    df['swing_high'] = df['high'].rolling(5).max().shift(1)
+    df['swing_low'] = df['low'].rolling(5).min().shift(1)
+
+    # 2. Liquidity Sweeps (Stop Hunts)
+    df['sweep_bull'] = (df['low'] < df['swing_low']) & (df['close'] > df['swing_low'])
+    df['sweep_bear'] = (df['high'] > df['swing_high']) & (df['close'] < df['swing_high'])
+
+    # 3. Fair Value Gaps (FVG)
+    df['fvg_bull_top'] = df['low']
+    df['fvg_bull_bot'] = df['high'].shift(2)
+    df['is_fvg_bull'] = df['fvg_bull_top'] > df['fvg_bull_bot']
+    
+    df['fvg_bear_bot'] = df['high']
+    df['fvg_bear_top'] = df['low'].shift(2)
+    df['is_fvg_bear'] = df['fvg_bear_bot'] < df['fvg_bear_top']
+
+    # 4. Break of Structure (BOS)
+    df['bos_bull'] = df['close'] > df['swing_high']
+    df['bos_bear'] = df['close'] < df['swing_low']
+    
+    # 5. Order Blocks (OB) - Last opposite candle before BOS
+    df['ob_bull_top'] = np.nan
+    df['ob_bull_bot'] = np.nan
+    df['ob_bear_top'] = np.nan
+    df['ob_bear_bot'] = np.nan
+    
+    for i in range(1, len(df)-1):
+        if df['bos_bull'].iloc[i]:
+            for j in range(i-1, max(i-5, 0), -1):
+                if df['close'].iloc[j] < df['open'].iloc[j]: # Red candle
+                    df.loc[df.index[i], 'ob_bull_top'] = df['high'].iloc[j]
+                    df.loc[df.index[i], 'ob_bull_bot'] = df['low'].iloc[j]
+                    break
+        elif df['bos_bear'].iloc[i]:
+            for j in range(i-1, max(i-5, 0), -1):
+                if df['close'].iloc[j] > df['open'].iloc[j]: # Green candle
+                    df.loc[df.index[i], 'ob_bear_top'] = df['high'].iloc[j]
+                    df.loc[df.index[i], 'ob_bear_bot'] = df['low'].iloc[j]
+                    break
+    return df
+
+def get_mtf_trend(sym, market_type):
+    try:
+        df_1h = get_kline(sym, market_type, interval="1h", limit=200)
+        if df_1h is not None and len(df_1h) >= 200:
+            ema200 = df_1h['close'].ewm(span=200).mean().iloc[-1]
+            close = df_1h['close'].iloc[-1]
+            return "BUY" if close > ema200 else "SELL"
+    except: pass
+    return None
+
 # ================= TELEGRAM =================
-def send_msg(text, markup=None):
+def send_msg(text, markup=None, chat_id=TG_CHAT_ID):
     if not TG_TOKEN: return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    payload = {"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "HTML"}
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if markup: payload["reply_markup"] = markup
     try: requests.post(url, json=payload, timeout=10)
     except: pass
 
-def send_photo(img, caption, markup=None):
+def send_photo(img, caption, markup=None, chat_id=TG_CHAT_ID):
     if not TG_TOKEN or not img: 
-        return send_msg(caption, markup)
+        return send_msg(caption, markup, chat_id)
     try:
-        data = {"chat_id": TG_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
+        data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
         if markup: data["reply_markup"] = json.dumps(markup)
         requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto", files={'photo': ('c.png', img, 'image/png')}, data=data, timeout=15)
     except: 
-        send_msg(caption, markup)
+        send_msg(caption, markup, chat_id)
 
 # ================= SCANNER =================
 def scan_market(market_type, is_manual=False, manual_chat_id=None):
-    print(f"[{time.strftime('%H:%M:%S')}] Scanning {market_type.upper()}...")
+    print(f"[{time.strftime('%H:%M:%S')}] Scanning SMC on {market_type.upper()}...")
     
     symbols_to_scan = []
     if market_type == "coindcx":
         data = get_coindcx_ticker()
         if data:
             valid = [c for c in data if float(c.get('volume', 0)) > 50000]
-            valid = sorted(valid, key=lambda x: float(x.get('volume', 0)), reverse=True)[:20]
+            valid = sorted(valid, key=lambda x: float(x.get('volume', 0)), reverse=True)[:15]
             symbols_to_scan = [c['market'] for c in valid]
-    elif market_type == "coinbase":
-        symbols_to_scan = COINBASE_TOP
-    elif market_type == "stocks":
-        symbols_to_scan = list(STOCK_TOP.keys())
-    elif market_type == "commodities":
-        symbols_to_scan = list(COMMODITY_TOP.keys())
+    elif market_type == "coinbase": symbols_to_scan = COINBASE_TOP
+    elif market_type == "stocks": symbols_to_scan = list(STOCK_TOP.keys())
+    elif market_type == "commodities": symbols_to_scan = list(COMMODITY_TOP.keys())
     
     found = 0
     for sym in symbols_to_scan:
-        if found >= 2: break # Max 2 signals per market per scan
+        if found >= 2: break
         if sym in active_trades: continue
         
         try:
-            df = get_kline(sym, market_type)
+            df = get_kline(sym, market_type, "15m", 200)
             if df is None or len(df) < 200: continue
             
             df = calculate_indicators(df)
+            df = calculate_smc(df)
             last = df.iloc[-1]
             
-            ema_buy = last['close'] > last['ema200'] and last['ema50'] > last['ema200']
-            ema_sell = last['close'] < last['ema200'] and last['ema50'] < last['ema200']
-            macd_buy = last['macd'] > last['macd_signal']
-            macd_sell = last['macd'] < last['macd_signal']
-            rsi_buy = last['rsi'] > 50
-            rsi_sell = last['rsi'] < 50
-            vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.1)
-            
+            # --- BULLISH SMC LOGIC ---
+            bos_bull_indices = df.index[df['bos_bull'] == True].tolist()
+            recent_bos_bull = False
+            last_bos_idx = -1
+            if bos_bull_indices:
+                last_bos_idx = bos_bull_indices[-1]
+                if len(df) - last_bos_idx <= 10: recent_bos_bull = True
+                    
+            sweep_bull_before = False
+            if recent_bos_bull:
+                for s_idx in df.index[df['sweep_bull'] == True].tolist():
+                    if s_idx < last_bos_idx and (last_bos_idx - s_idx) <= 20:
+                        sweep_bull_before = True; break
+                        
+            in_zone_bull = False
+            if recent_bos_bull:
+                for i in range(last_bos_idx, len(df)):
+                    if df.iloc[i]['is_fvg_bull']:
+                        if last['low'] <= df.iloc[i]['fvg_bull_top'] and last['close'] >= df.iloc[i]['fvg_bull_bot']:
+                            in_zone_bull = True; break
+                    if not pd.isna(df.iloc[i]['ob_bull_top']):
+                        if last['low'] <= df.iloc[i]['ob_bull_top'] and last['close'] >= df.iloc[i]['ob_bull_bot']:
+                            in_zone_bull = True; break
+                            
+            # --- BEARISH SMC LOGIC ---
+            bos_bear_indices = df.index[df['bos_bear'] == True].tolist()
+            recent_bos_bear = False
+            last_bos_bear_idx = -1
+            if bos_bear_indices:
+                last_bos_bear_idx = bos_bear_indices[-1]
+                if len(df) - last_bos_bear_idx <= 10: recent_bos_bear = True
+                    
+            sweep_bear_before = False
+            if recent_bos_bear:
+                for s_idx in df.index[df['sweep_bear'] == True].tolist():
+                    if s_idx < last_bos_bear_idx and (last_bos_bear_idx - s_idx) <= 20:
+                        sweep_bear_before = True; break
+                        
+            in_zone_bear = False
+            if recent_bos_bear:
+                for i in range(last_bos_bear_idx, len(df)):
+                    if df.iloc[i]['is_fvg_bear']:
+                        if last['high'] >= df.iloc[i]['fvg_bear_bot'] and last['close'] <= df.iloc[i]['fvg_bear_top']:
+                            in_zone_bear = True; break
+                    if not pd.isna(df.iloc[i]['ob_bear_top']):
+                        if last['high'] >= df.iloc[i]['ob_bear_bot'] and last['close'] <= df.iloc[i]['ob_bear_top']:
+                            in_zone_bear = True; break
+
             sig = None
-            if ema_buy and macd_buy and rsi_buy and vol_spike and last['close'] > last['open']:
-                sig = "BUY"
-            elif ema_sell and macd_sell and rsi_sell and vol_spike and last['close'] < last['open']:
-                sig = "SELL"
+            # Verify MTF before firing
+            if recent_bos_bull and sweep_bull_before and in_zone_bull and last['close'] > last['open']:
+                mtf = get_mtf_trend(sym, market_type)
+                if mtf == "BUY": sig = "BUY"
+            elif recent_bos_bear and sweep_bear_before and in_zone_bear and last['close'] < last['open']:
+                mtf = get_mtf_trend(sym, market_type)
+                if mtf == "SELL": sig = "SELL"
                 
             if sig:
                 entry = last['close']
                 risk = last['atr'] * 1.5
-                if sig == "BUY":
-                    sl, tp1, tp2, tp3 = entry - risk, entry + (risk*2), entry + (risk*3), entry + (risk*4)
-                else:
-                    sl, tp2, tp3, tp1 = entry + risk, entry - (risk*2), entry - (risk*3), entry - (risk*4)
-                    tp1, tp2, tp3 = tp1, tp2, tp3
+                if sig == "BUY": sl, tp1, tp2, tp3 = entry - risk, entry + (risk*2), entry + (risk*3), entry + (risk*4)
+                else: sl, tp1, tp2, tp3 = entry + risk, entry - (risk*2), entry - (risk*3), entry - (risk*4)
                     
-                if market_type == "coindcx":
-                    clean_sym = sym.replace("B-", "").replace("_", "")
-                    link = f"coindcx://trade/{clean_sym}"
-                elif market_type == "coinbase":
-                    clean_sym = sym.replace("-USD", "")
-                    link = f"https://www.coinbase.com/advanced-trade/spot/{sym}"
-                elif market_type == "stocks":
-                    clean_sym = STOCK_TOP.get(sym, sym)
-                    link = f"https://finance.yahoo.com/quote/{sym}"
-                else:
-                    clean_sym = COMMODITY_TOP.get(sym, sym)
-                    link = f"https://finance.yahoo.com/quote/{sym}"
+                if market_type == "coindcx": clean_sym = sym.replace("B-", "").replace("_", ""); link = f"coindcx://trade/{clean_sym}"
+                elif market_type == "coinbase": clean_sym = sym.replace("-USD", ""); link = f"https://www.coinbase.com/advanced-trade/spot/{sym}"
+                elif market_type == "stocks": clean_sym = STOCK_TOP.get(sym, sym); link = f"https://finance.yahoo.com/quote/{sym}"
+                else: clean_sym = COMMODITY_TOP.get(sym, sym); link = f"https://finance.yahoo.com/quote/{sym}"
                 
-                # FULL DETAILS MESSAGE
                 text = (
-                    f"<b>🔥 {clean_sym} {sig} ({market_type.upper()})</b>\n\n"
+                    f"<b>🧠 SMC SIGNAL: {clean_sym} {sig} ({market_type.upper()})</b>\n\n"
                     f"💰 <b>Entry:</b> {fmt(entry)}\n"
                     f"🛑 <b>SL:</b> {fmt(sl)}\n"
                     f"🎯 <b>TP1:</b> {fmt(tp1)}\n"
                     f"🎯 <b>TP2:</b> {fmt(tp2)}\n"
                     f"🎯 <b>TP3:</b> {fmt(tp3)}\n\n"
-                    f"📊 <b>RSI:</b> {last['rsi']:.1f}\n"
+                    f"⚡️ <b>Setup:</b> Sweep + BOS + FVG/OB Retest\n"
+                    f"✅ <b>MTF (1H):</b> Aligned\n"
                     f"⏱ TF: 15m"
                 )
                 
                 markup = {"inline_keyboard": [[{"text": f"📋 Copy", "copy_text": {"text": clean_sym}}], [{"text": "📈 Open Chart", "url": link}], [{"text": "❌ Close", "callback_data": f"close_{sym}"}]]}
                 
-                if is_manual and manual_chat_id:
-                    # For manual scan, reply directly to the chat
-                    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-                    requests.post(url, json={"chat_id": manual_chat_id, "text": text, "parse_mode": "HTML", "reply_markup": markup})
-                else:
-                    # For auto scan, send to default chat
-                    send_msg(text, markup)
+                chat = manual_chat_id if is_manual else TG_CHAT_ID
+                send_msg(text, markup, chat)
                 
-                # Chart Generation
                 try:
                     df_chart = df.tail(30)
                     c_data = [{"x": str(i), "o": float(r.open), "h": float(r.high), "l": float(r.low), "c": float(r.close)} for i, r in enumerate(df_chart.itertuples())]
@@ -240,33 +306,22 @@ def scan_market(market_type, is_manual=False, manual_chat_id=None):
                         cfg = {"type": "candlestick", "data": {"datasets": [{"data": c_data, "color": {"up": "#00c864", "down": "#ff3c3c"}}]}, "options": {"scales": {"x": {"display": False}, "y": {"position": "right", "ticks": {"color": "#fff"}}}, "plugins": {"legend": {"display": False}, "annotation": {"annotations": ann}}}}
                         q_res = requests.post("https://quickchart.io/chart", json={"chart": cfg, "width": 800, "height": 450, "backgroundColor": "#131722", "version": "3"}, timeout=10)
                         if q_res.status_code == 200:
-                            if is_manual and manual_chat_id:
-                                url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
-                                files = {'photo': ('c.png', q_res.content, 'image/png')}
-                                requests.post(url, files=files, data={"chat_id": manual_chat_id, "caption": f"📈 <b>{clean_sym} Chart</b>", "parse_mode": "HTML"}, timeout=15)
-                            else:
-                                send_photo(q_res.content, f"📈 <b>{clean_sym} Chart</b>")
+                            send_photo(q_res.content, f"📈 <b>{clean_sym} Chart</b>", chat_id=chat)
                 except: pass
                 
                 active_trades[sym] = {'type': sig, 'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'market': market_type}
                 found += 1
-                time.sleep(3) # Gap between signals
-                
-        except Exception as e:
-            time.sleep(1)
-            
+                time.sleep(4) # Delay for SMC checks
+        except: pass
     if is_manual and manual_chat_id:
-        requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": manual_chat_id, "text": f"✅ Scan Complete on {market_type.upper()}. Found {found} signals.", "parse_mode": "HTML"})
+        send_msg(f"✅ SMC Scan Complete on {market_type.upper()}. Found {found} signals.", chat_id=manual_chat_id)
 
 def bot_loop():
     while True:
-        # Auto-scan ALL markets
-        scan_market("coindcx", False)
-        scan_market("coinbase", False)
-        scan_market("stocks", False)
-        scan_market("commodities", False)
-        
-        print("All Markets Scanned. Sleeping for 5 mins...")
+        scan_market("coindcx")
+        scan_market("coinbase")
+        scan_market("stocks")
+        scan_market("commodities")
         time.sleep(300) 
 
 # ================= MONITOR =================
@@ -310,27 +365,19 @@ def commands():
                                     send_msg(f"🛑 Trade Manually Closed.")
                             elif txt.startswith("scan_"):
                                 mkt = txt.replace("scan_", "")
-                                send_msg(f"⏳ Manual scan on {mkt.upper()} starting...")
+                                send_msg(f"⏳ Running SMC Scan on {mkt.upper()}...")
                                 Thread(target=scan_market, args=(mkt, True, cid)).start()
                             elif txt == "trades":
-                                if not active_trades: 
-                                    send_msg("💤 No active trades.")
+                                if not active_trades: send_msg("💤 No active trades.")
                                 else:
                                     for s, t in active_trades.items():
                                         mkt = t.get('market', 'coindcx').upper()
-                                        msg = (
-                                            f"🪙 <b>{s}</b> ({t['type']}) - {mkt}\n"
-                                            f"💰 Entry: {fmt(t['entry'])}\n"
-                                            f"🛑 SL: {fmt(t['sl'])}\n"
-                                            f"🎯 TP1: {fmt(t['tp1'])}\n"
-                                            f"🎯 TP2: {fmt(t['tp2'])}\n"
-                                            f"🎯 TP3: {fmt(t['tp3'])}"
-                                        )
+                                        msg = f"🪙 <b>{s}</b> ({t['type']}) - {mkt}\n💰 Entry: {fmt(t['entry'])}\n🛑 SL: {fmt(t['sl'])}\n🎯 TP1: {fmt(t['tp1'])}\n🎯 TP2: {fmt(t['tp2'])}\n🎯 TP3: {fmt(t['tp3'])}"
                                         send_msg(msg, {"inline_keyboard": [[{"text": "❌ Close", "callback_data": f"close_{s}"}]]})
                                         time.sleep(0.5)
                             elif txt == "clearall":
                                 active_trades.clear()
-                                send_msg("✅ <b>All active trades cleared!</b> Bot will now find fresh signals.")
+                                send_msg("✅ <b>All active trades cleared!</b>")
                         
                         requests.get(f"https://api.telegram.org/bot{TG_TOKEN}/answerCallbackQuery?callback_query_id={cb_id}")
                         continue
@@ -346,7 +393,7 @@ def commands():
                                 [{"text": "📊 Active Trades", "callback_data": "trades"}],
                                 [{"text": "🧹 Clear All Trades", "callback_data": "clearall"}]
                             ]}
-                            send_msg("👋 <b>All-in-One Master Bot</b>\n\n✅ Auto-Scan is ON for all markets (Every 5 Mins)\n\nSelect a market to manually scan right now:", markup)
+                            send_msg("👋 <b>SMC Master Bot</b>\n\n✅ Auto-Scan is ON\n🧠 Strategy: Liquidity Sweep + BOS + FVG/OB Retest + MTF\n\nSelect a market to manually scan right now:", markup)
         except: pass
         time.sleep(2)
 
