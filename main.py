@@ -127,28 +127,30 @@ def calculate_pro_indicators(df):
     df['obv_ema'] = df['obv'].ewm(span=20, adjust=False).mean()
     return df
 
-# ================= AI ANALYSIS =================
+# ================= AI ANALYSIS (UPDATED MODELS) =================
 def get_ai_verdict(symbol, signal, score):
     prompt = f"Stock: {symbol}, Signal: {signal}, Score: {score}/7. Reply in ONE short sentence."
     errors = []
     
+    # Groq - Correct model: llama-3.1-8b-instant
     if GROQ_API_KEY:
         try:
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-            data = {"model": "llama3-8b-8192", "messages": [{"role": "user", "content": prompt}], "max_tokens": 50}
+            data = {"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}], "max_tokens": 50}
             res = requests.post(url, headers=headers, json=data, timeout=8).json()
             if 'choices' in res: return res['choices'][0]['message']['content'].strip()
-            else: errors.append(f"Groq: {res.get('error', {}).get('message', 'Unknown Error')}")
+            else: errors.append(f"Groq: {res.get('error', {}).get('message', 'Error')}")
         except Exception as e: errors.append(f"Groq: {str(e)}")
             
+    # Gemini - Correct model: gemini-3.8-flash
     if GEMINI_API_KEY:
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={GEMINI_API_KEY}"
             data = {"contents": [{"parts": [{"text": prompt}]}]}
             res = requests.post(url, json=data, timeout=8).json()
             if 'candidates' in res: return res['candidates'][0]['content']['parts'][0]['text'].strip()
-            else: errors.append(f"Gemini: {res.get('error', {}).get('message', 'Unknown Error')}")
+            else: errors.append(f"Gemini: {res.get('error', {}).get('message', 'Error')}")
         except Exception as e: errors.append(f"Gemini: {str(e)}")
             
     if not errors: return "AI Error: No Keys found."
@@ -194,7 +196,6 @@ def scan_market(is_manual=False):
         if found >= 5: break 
         
         sym = c['symbol']
-        # IMPORTANT: Skip if already active, for both manual and auto
         if sym in active_trades: continue
         
         try:
@@ -221,7 +222,6 @@ def scan_market(is_manual=False):
             if last['obv'] < last['obv_ema']: sell_score += 1
             
             sig, score = None, 0
-            # Relaxed to 4/7 for more signals
             if buy_score >= 4 and last['close'] > last['open']: 
                 sig, score = "BUY", buy_score
             elif sell_score >= 4 and last['close'] < last['open']: 
@@ -342,6 +342,9 @@ def commands():
                                     [{"text": f"🔄 Switch to {'Coinbase' if EXCHANGE == 'binance' else 'Binance'}", "callback_data": "switch"}]
                                 ]}
                                 send_msg(f"Current Exchange: <b>{EXCHANGE.upper()}</b>", markup)
+                            elif txt == "clearall":
+                                active_trades.clear()
+                                send_msg("✅ <b>All active trades cleared!</b> Bot will now find fresh signals.")
                         
                         requests.get(f"https://api.telegram.org/bot{TG_TOKEN}/answerCallbackQuery?callback_query_id={cb_id}")
                         continue
@@ -357,7 +360,7 @@ def commands():
                                 [{"text": f"🔄 Switch to {'Coinbase' if EXCHANGE == 'binance' else 'Binance'}", "callback_data": "switch"}],
                                 [{"text": "🧹 Clear All Trades", "callback_data": "clearall"}]
                             ]}
-                            send_msg(f"👋 <b>Welcome to V68!</b>\nExchange: <b>{EXCHANGE.upper()}</b>\n\n✅ Auto-Scan ON (4/7 Score)\n🤖 <i>Type /testai to check AI</i>", markup)
+                            send_msg(f"👋 <b>Welcome to V69!</b>\nExchange: <b>{EXCHANGE.upper()}</b>\n\n✅ Auto-Scan ON (4/7 Score)\n🤖 <i>Type /testai to check AI</i>", markup)
                         elif txt == "clearall":
                             active_trades.clear()
                             send_msg("✅ <b>All active trades cleared!</b> Bot will now find fresh signals.")
