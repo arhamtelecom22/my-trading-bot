@@ -7,18 +7,16 @@ from flask import Flask
 from threading import Thread
 import json
 
-# ================= KEYS =================
+# ================= TOKEN =================
 TG_TOKEN = os.environ.get("TG_TOKEN", "").strip()
 TG_CHAT_ID = "762295473"
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip() 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip() 
 # ========================================
 
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is Running 24/7!"
+    return "All-in-One Master Bot is Running 24/7!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -29,12 +27,14 @@ def keep_alive():
 
 # ================= GLOBAL VARIABLES =================
 active_trades = {}
-SCAN_TIMEFRAME = "15m"
-EXCHANGE = "binance"  
+CURRENT_MARKET = "coindcx"  # Options: coindcx, coinbase, stocks, commodities
 last_ticker_data = []
 last_ticker_time = 0
 
-COINBASE_TOP = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "ADA-USD", "AVAX-USD", "LINK-USD", "DOT-USD", "DOGE-USD", "SHIB-USD", "LTC-USD", "BCH-USD", "MATIC-USD", "UNI-USD", "ATOM-USD", "ETC-USD", "XLM-USD", "NEAR-USD", "APT-USD", "ARB-USD"]
+# Lists for different markets
+COINBASE_TOP = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "ADA-USD", "AVAX-USD", "LINK-USD", "DOT-USD", "DOGE-USD", "SHIB-USD", "LTC-USD", "BCH-USD", "MATIC-USD", "UNI-USD", "ATOM-USD"]
+STOCK_TOP = {"^NSEI": "NIFTY 50", "^BSESN": "SENSEX", "RELIANCE.NS": "RELIANCE", "TCS.NS": "TCS", "HDFCBANK.NS": "HDFC BANK", "AAPL": "APPLE", "MSFT": "MICROSOFT", "GOOGL": "GOOGLE", "NVDA": "NVIDIA", "TSLA": "TESLA"}
+COMMODITY_TOP = {"GC=F": "GOLD", "SI=F": "SILVER", "CL=F": "CRUDE OIL", "HG=F": "COPPER", "NG=F": "NATURAL GAS"}
 
 def fmt(p):
     try: return f"{float(p):.4f}"
@@ -48,65 +48,65 @@ def get_ticker():
         return last_ticker_data
     
     try:
-        if EXCHANGE == "binance":
-            urls = [
-                "https://api.binance.com/api/v3/ticker/24hr",
-                "https://data-api.binance.vision/api/v3/ticker/24hr"
-            ]
-            for url in urls:
-                try:
-                    res = requests.get(url, timeout=5)
-                    if res.status_code == 200:
-                        data = res.json()
-                        filtered = [c for c in data if c['symbol'].endswith('USDT')]
-                        last_ticker_data = filtered
-                        last_ticker_time = now
-                        return filtered
-                except: pass
-        elif EXCHANGE == "coinbase":
-            return [{'symbol': s, 'quoteVolume': 50000000, 'priceChangePercent': 0, 'lastPrice': 0} for s in COINBASE_TOP]
-    except Exception as e:
-        print(f"{EXCHANGE} Ticker Error:", e)
+        if CURRENT_MARKET == "coindcx":
+            res = requests.get("https://api.coindcx.com/exchange/ticker", timeout=10)
+            if res.status_code == 200:
+                filtered = [c for c in res.json() if 'USDT' in str(c.get('market'))]
+                last_ticker_data = filtered
+                last_ticker_time = now
+                return filtered
+        elif CURRENT_MARKET == "coinbase":
+            return [{'symbol': s, 'volume': 50000000, 'change24hour': 0, 'lastPrice': 0} for s in COINBASE_TOP]
+    except: pass
     return last_ticker_data if last_ticker_data else []
 
-def get_kline(sym, interval="15m", limit=200):
+def get_kline(sym):
     try:
-        if EXCHANGE == "binance":
-            urls = [
-                f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}",
-                f"https://data-api.binance.vision/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}"
-            ]
-            for url in urls:
-                try:
-                    res = requests.get(url, timeout=5).json()
-                    if isinstance(res, list) and len(res) > 0:
-                        df = pd.DataFrame(res, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'tbbav', 'tbqav', 'ignore'])
-                        for col in ['open', 'high', 'low', 'close', 'volume']: df[col] = df[col].astype(float)
-                        return df
-                except: pass
-            return None
-            
-        elif EXCHANGE == "coinbase":
-            granularity = 900 if interval == "15m" else 3600
+        if CURRENT_MARKET == "coindcx":
+            c_sym = sym if '_' in sym else 'B-' + sym.replace('USDT', '_USDT')
+            url = f"https://public.coindcx.com/market_data/candles?pair={c_sym}&interval=15m&limit=200"
+            res = requests.get(url, timeout=10).json()
+            if isinstance(res, list):
+                res.reverse()
+                df = pd.DataFrame(res)
+                for col in ['open', 'high', 'low', 'close', 'volume']: df[col] = df[col].astype(float)
+                return df
+                
+        elif CURRENT_MARKET == "coinbase":
+            granularity = 900
             url = f"https://api.exchange.coinbase.com/products/{sym}/candles?granularity={granularity}"
             res = requests.get(url, timeout=10).json()
-            if not isinstance(res, list): return None
-            df = pd.DataFrame(res, columns=['time', 'low', 'high', 'open', 'close', 'volume'])
-            df = df.iloc[::-1].reset_index(drop=True)
-            for col in ['open', 'high', 'low', 'close', 'volume']: df[col] = df[col].astype(float)
-            return df.tail(limit)
-    except Exception as e:
-        pass
+            if isinstance(res, list):
+                df = pd.DataFrame(res, columns=['time', 'low', 'high', 'open', 'close', 'volume'])
+                df = df.iloc[::-1].reset_index(drop=True)
+                for col in ['open', 'high', 'low', 'close', 'volume']: df[col] = df[col].astype(float)
+                return df.tail(200)
+                
+        elif CURRENT_MARKET in ["stocks", "commodities"]:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=15m&range=5d"
+            res = requests.get(url, timeout=10).json()
+            result = res['chart']['result'][0]
+            timestamps = result['timestamp']
+            closes = result['indicators']['quote'][0]['close']
+            opens = result['indicators']['quote'][0]['open']
+            highs = result['indicators']['quote'][0]['high']
+            lows = result['indicators']['quote'][0]['low']
+            volumes = result['indicators']['quote'][0]['volume']
+            
+            data = []
+            for i in range(len(timestamps)):
+                if closes[i] is not None and opens[i] is not None and highs[i] is not None and lows[i] is not None:
+                    data.append({'open': opens[i], 'high': highs[i], 'low': lows[i], 'close': closes[i], 'volume': volumes[i] or 0})
+            
+            df = pd.DataFrame(data)
+            return df if len(df) >= 200 else None
+    except: pass
     return None
 
 # ================= INDICATORS =================
-def calculate_pro_indicators(df):
+def calculate_indicators(df):
     df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
-    df['ema12'] = df['close'].ewm(span=12, adjust=False).mean()
-    df['ema26'] = df['close'].ewm(span=26, adjust=False).mean()
-    df['macd'] = df['ema12'] - df['ema26']
-    df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
-    df['sma20'] = df['close'].rolling(window=20).mean()
+    df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -114,49 +114,15 @@ def calculate_pro_indicators(df):
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
-    df['rsi_min'] = df['rsi'].rolling(14).min()
-    df['rsi_max'] = df['rsi'].rolling(14).max()
-    df['stoch_rsi'] = (df['rsi'] - df['rsi_min']) / (df['rsi_max'] - df['rsi_min'])
+    df['ema12'] = df['close'].ewm(span=12, adjust=False).mean()
+    df['ema26'] = df['close'].ewm(span=26, adjust=False).mean()
+    df['macd'] = df['ema12'] - df['ema26']
+    df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     
-    df['ha_close'] = (df['open'] + df['high'] + df['low'] + df['close']) / 4
-    df['ha_open'] = (df['open'].shift(1) + df['close'].shift(1)) / 2
-    df['ha_bullish'] = df['ha_close'] > df['ha_open']
-    
-    df['kijun'] = (df['high'].rolling(26).max() + df['low'].rolling(26).min()) / 2
-    df['obv'] = (np.sign(df['close'].diff()) * df['volume']).fillna(0).cumsum()
-    df['obv_ema'] = df['obv'].ewm(span=20, adjust=False).mean()
+    df['atr'] = (df['high'] - df['low']).rolling(window=14).mean()
     return df
 
-# ================= AI ANALYSIS (UPDATED MODELS) =================
-def get_ai_verdict(symbol, signal, score):
-    prompt = f"Stock: {symbol}, Signal: {signal}, Score: {score}/7. Reply in ONE short sentence."
-    errors = []
-    
-    # Groq - Correct model: llama-3.1-8b-instant
-    if GROQ_API_KEY:
-        try:
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-            data = {"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}], "max_tokens": 50}
-            res = requests.post(url, headers=headers, json=data, timeout=8).json()
-            if 'choices' in res: return res['choices'][0]['message']['content'].strip()
-            else: errors.append(f"Groq: {res.get('error', {}).get('message', 'Error')}")
-        except Exception as e: errors.append(f"Groq: {str(e)}")
-            
-    # Gemini - Correct model: gemini-3.8-flash
-    if GEMINI_API_KEY:
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={GEMINI_API_KEY}"
-            data = {"contents": [{"parts": [{"text": prompt}]}]}
-            res = requests.post(url, json=data, timeout=8).json()
-            if 'candidates' in res: return res['candidates'][0]['content']['parts'][0]['text'].strip()
-            else: errors.append(f"Gemini: {res.get('error', {}).get('message', 'Error')}")
-        except Exception as e: errors.append(f"Gemini: {str(e)}")
-            
-    if not errors: return "AI Error: No Keys found."
-    return f"AI Failed: {' | '.join(errors)}"
-
-# ================= TELEGRAM HELPERS =================
+# ================= TELEGRAM =================
 def send_msg(text, markup=None):
     if not TG_TOKEN: return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
@@ -177,77 +143,81 @@ def send_photo(img, caption, markup=None):
 
 # ================= SCANNER =================
 def scan_market(is_manual=False):
-    global EXCHANGE
-    print(f"[{time.strftime('%H:%M:%S')}] Scanning {EXCHANGE.upper()}...")
-    data = get_ticker()
-    if not data: 
-        if is_manual: send_msg(f"❌ Failed to fetch data from {EXCHANGE}.")
-        return
+    global CURRENT_MARKET
+    print(f"[{time.strftime('%H:%M:%S')}] Scanning {CURRENT_MARKET.upper()}...")
     
-    valid = []
-    if EXCHANGE == "binance":
-        valid = [c for c in data if float(c.get('quoteVolume', 0)) > 5000000]
-        valid = sorted(valid, key=lambda x: float(x.get('quoteVolume', 0)), reverse=True)[:30]
-    else:
-        valid = data[:10] 
+    symbols_to_scan = []
+    if CURRENT_MARKET == "coindcx":
+        data = get_ticker()
+        if not data: 
+            if is_manual: send_msg("❌ Failed to fetch CoinDCX data.")
+            return
+        valid = [c for c in data if float(c.get('volume', 0)) > 50000]
+        valid = sorted(valid, key=lambda x: float(x.get('volume', 0)), reverse=True)[:20]
+        symbols_to_scan = [c['market'] for c in valid]
+        
+    elif CURRENT_MARKET == "coinbase":
+        symbols_to_scan = COINBASE_TOP
+    elif CURRENT_MARKET == "stocks":
+        symbols_to_scan = list(STOCK_TOP.keys())
+    elif CURRENT_MARKET == "commodities":
+        symbols_to_scan = list(COMMODITY_TOP.keys())
     
     found = 0
-    for c in valid:
-        if found >= 5: break 
-        
-        sym = c['symbol']
+    for sym in symbols_to_scan:
+        if found >= 3: break
         if sym in active_trades: continue
         
         try:
-            df = get_kline(sym, "15m", 200)
+            df = get_kline(sym)
             if df is None or len(df) < 200: continue
             
-            df = calculate_pro_indicators(df)
+            df = calculate_indicators(df)
             last = df.iloc[-1]
             
-            buy_score, sell_score = 0, 0
-            if last['close'] > last['ema200']: buy_score += 1
-            if last['close'] < last['ema200']: sell_score += 1
-            if last['close'] > last['kijun']: buy_score += 1
-            if last['close'] < last['kijun']: sell_score += 1
-            if last['ha_bullish']: buy_score += 1
-            else: sell_score += 1
-            if last['macd'] > last['macd_signal']: buy_score += 1
-            if last['macd'] < last['macd_signal']: sell_score += 1
-            if last['rsi'] > 50 and last['stoch_rsi'] > 0.5: buy_score += 1
-            if last['rsi'] < 50 and last['stoch_rsi'] < 0.5: sell_score += 1
-            if last['close'] > last['sma20']: buy_score += 1
-            if last['close'] < last['sma20']: sell_score += 1
-            if last['obv'] > last['obv_ema']: buy_score += 1
-            if last['obv'] < last['obv_ema']: sell_score += 1
+            ema_buy = last['close'] > last['ema200'] and last['ema50'] > last['ema200']
+            ema_sell = last['close'] < last['ema200'] and last['ema50'] < last['ema200']
+            macd_buy = last['macd'] > last['macd_signal']
+            macd_sell = last['macd'] < last['macd_signal']
+            rsi_buy = last['rsi'] > 50
+            rsi_sell = last['rsi'] < 50
+            vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.1)
             
-            sig, score = None, 0
-            if buy_score >= 4 and last['close'] > last['open']: 
-                sig, score = "BUY", buy_score
-            elif sell_score >= 4 and last['close'] < last['open']: 
-                sig, score = "SELL", sell_score
+            sig = None
+            if ema_buy and macd_buy and rsi_buy and vol_spike and last['close'] > last['open']:
+                sig = "BUY"
+            elif ema_sell and macd_sell and rsi_sell and vol_spike and last['close'] < last['open']:
+                sig = "SELL"
                 
             if sig:
                 entry = last['close']
-                risk = (last['high'] - last['low']) * 1.5
+                risk = last['atr'] * 1.5
                 if sig == "BUY":
                     sl, tp1, tp2, tp3 = entry - risk, entry + (risk*2), entry + (risk*3), entry + (risk*4)
                 else:
                     sl, tp1, tp2, tp3 = entry + risk, entry - (risk*2), entry - (risk*3), entry - (risk*4)
                     
-                clean_sym = sym.replace("USDT", "").replace("-USD", "")
-                ai_text = get_ai_verdict(clean_sym, sig, score)
+                if CURRENT_MARKET == "coindcx":
+                    clean_sym = sym.replace("B-", "").replace("_", "")
+                    link = f"coindcx://trade/{clean_sym}"
+                elif CURRENT_MARKET == "coinbase":
+                    clean_sym = sym.replace("-USD", "")
+                    link = f"https://www.coinbase.com/advanced-trade/spot/{sym}"
+                elif CURRENT_MARKET == "stocks":
+                    clean_sym = STOCK_TOP.get(sym, sym)
+                    link = f"https://finance.yahoo.com/quote/{sym}"
+                else:
+                    clean_sym = COMMODITY_TOP.get(sym, sym)
+                    link = f"https://finance.yahoo.com/quote/{sym}"
                 
                 text = (
-                    f"<b>🔥 #{clean_sym} {sig} ({EXCHANGE.upper()})</b>\n\n"
+                    f"<b>🔥 {clean_sym} {sig} ({CURRENT_MARKET.upper()})</b>\n\n"
                     f"Entry: {fmt(entry)}\nSL: {fmt(sl)}\nTP1: {fmt(tp1)}\nTP2: {fmt(tp2)}\nTP3: {fmt(tp3)}\n\n"
-                    f"📊 <b>Confluence:</b> {score}/7\n"
-                    f"🤖 <b>AI:</b> <i>{ai_text}</i>\n"
+                    f"📊 <b>RSI:</b> {last['rsi']:.1f}\n"
                     f"⏱ TF: 15m"
                 )
                 
-                url_link = f"https://www.binance.com/en/trade/{clean_sym}_USDT?type=spot" if EXCHANGE == "binance" else f"https://www.coinbase.com/advanced-trade/spot/{clean_sym}-USD"
-                markup = {"inline_keyboard": [[{"text": f"📋 Copy", "copy_text": {"text": clean_sym}}], [{"text": f"📈 Open {EXCHANGE.capitalize()}", "url": url_link}], [{"text": "❌ Close", "callback_data": f"close_{sym}"}]]}
+                markup = {"inline_keyboard": [[{"text": f"📋 Copy", "copy_text": {"text": clean_sym}}], [{"text": "📈 Open Chart", "url": link}], [{"text": "❌ Close", "callback_data": f"close_{sym}"}]]}
                 
                 send_msg(text, markup)
                 
@@ -269,7 +239,7 @@ def scan_market(is_manual=False):
                             send_photo(q_res.content, f"📈 <b>{clean_sym} Chart</b>")
                 except: pass
                 
-                active_trades[sym] = {'type': sig, 'entry': entry, 'sl': sl, 'tp1': tp1}
+                active_trades[sym] = {'type': sig, 'entry': entry, 'sl': sl, 'tp1': tp1, 'market': CURRENT_MARKET}
                 found += 1
                 time.sleep(3)
                 
@@ -277,7 +247,7 @@ def scan_market(is_manual=False):
             time.sleep(1)
             
     if is_manual:
-        send_msg(f"✅ Scan Complete on {EXCHANGE.upper()}. Found {found} signals.")
+        send_msg(f"✅ Scan Complete on {CURRENT_MARKET.upper()}. Found {found} signals.")
 
 def bot_loop():
     while True:
@@ -288,24 +258,29 @@ def bot_loop():
 def monitor():
     while True:
         try:
-            if EXCHANGE == "binance":
-                data = get_ticker()
-                prices = {t['symbol']: float(t['lastPrice']) for t in data}
+            if CURRENT_MARKET in ["coindcx", "coinbase"]:
+                if CURRENT_MARKET == "coindcx":
+                    data = get_ticker()
+                    prices = {t['market']: float(t['last_price']) for t in data}
+                else:
+                    # Simplified for Coinbase (skip active monitoring to save API limits)
+                    prices = {}
+                
                 for sym, t in list(active_trades.items()):
                     if sym in prices:
                         p = prices[sym]
                         if (t['type'] == "BUY" and p <= t['sl']) or (t['type'] == "SELL" and p >= t['sl']):
-                            send_msg(f"❌ <b>{sym.replace('USDT','')} Hit STOP LOSS</b>\nPrice: {fmt(p)}")
+                            send_msg(f"❌ <b>{sym.replace('B-','').replace('_','')} Hit STOP LOSS</b>\nPrice: {fmt(p)}")
                             del active_trades[sym]
                         elif (t['type'] == "BUY" and p >= t['tp1']) or (t['type'] == "SELL" and p <= t['tp1']):
-                            send_msg(f"✅ <b>{sym.replace('USDT','')} Hit TP1</b>\nPrice: {fmt(p)}")
+                            send_msg(f"✅ <b>{sym.replace('B-','').replace('_','')} Hit TP1</b>\nPrice: {fmt(p)}")
                             del active_trades[sym]
         except: pass
         time.sleep(20)
 
-# ================= COMMANDS =================
+# ================= COMMANDS & MENU =================
 def commands():
-    global EXCHANGE
+    global CURRENT_MARKET
     offset = 0
     while True:
         try:
@@ -325,26 +300,23 @@ def commands():
                                 if sym in active_trades: del active_trades[sym]
                                 send_msg(f"🛑 Trade Manually Closed.")
                             elif txt == "scan":
-                                send_msg(f"⏳ Manual scan on {EXCHANGE.upper()} starting...")
+                                send_msg(f"⏳ Manual scan on {CURRENT_MARKET.upper()} starting...")
                                 Thread(target=scan_market, args=(True,)).start()
                             elif txt == "trades":
                                 if not active_trades: send_msg("💤 No active trades.")
                                 else:
                                     for s, t in active_trades.items():
-                                        send_msg(f"🪙 <b>{s.replace('USDT','').replace('-USD','')}</b> ({t['type']})\nEntry: {fmt(t['entry'])}", {"inline_keyboard": [[{"text": "❌ Close", "callback_data": f"close_{s}"}]]})
+                                        mkt = t.get('market', 'coindcx').upper()
+                                        send_msg(f"🪙 <b>{s}</b> ({t['type']}) - {mkt}\nEntry: {fmt(t['entry'])}", {"inline_keyboard": [[{"text": "❌ Close", "callback_data": f"close_{s}"}]]})
                                         time.sleep(0.5)
-                            elif txt == "switch":
-                                EXCHANGE = "coinbase" if EXCHANGE == "binance" else "binance"
-                                send_msg(f"🔄 <b>Exchange Switched to {EXCHANGE.upper()}</b>")
-                                markup = {"inline_keyboard": [
-                                    [{"text": "🚀 SCAN NOW", "callback_data": "scan"}], 
-                                    [{"text": "📊 Active Trades", "callback_data": "trades"}],
-                                    [{"text": f"🔄 Switch to {'Coinbase' if EXCHANGE == 'binance' else 'Binance'}", "callback_data": "switch"}]
-                                ]}
-                                send_msg(f"Current Exchange: <b>{EXCHANGE.upper()}</b>", markup)
                             elif txt == "clearall":
                                 active_trades.clear()
                                 send_msg("✅ <b>All active trades cleared!</b> Bot will now find fresh signals.")
+                            elif txt in ["coindcx", "coinbase", "stocks", "commodities"]:
+                                CURRENT_MARKET = txt
+                                market_names = {"coindcx": "CoinDCX (Crypto)", "coinbase": "Coinbase (Crypto)", "stocks": "Stocks", "commodities": "Commodities"}
+                                send_msg(f"✅ <b>Market Switched to {market_names[CURRENT_MARKET]}</b>")
+                                show_menu(cid)
                         
                         requests.get(f"https://api.telegram.org/bot{TG_TOKEN}/answerCallbackQuery?callback_query_id={cb_id}")
                         continue
@@ -354,22 +326,21 @@ def commands():
                     
                     if str(cid) == str(TG_CHAT_ID):
                         if txt in ["/start", "/menu"]:
-                            markup = {"inline_keyboard": [
-                                [{"text": "🚀 SCAN NOW", "callback_data": "scan"}], 
-                                [{"text": "📊 Active Trades", "callback_data": "trades"}],
-                                [{"text": f"🔄 Switch to {'Coinbase' if EXCHANGE == 'binance' else 'Binance'}", "callback_data": "switch"}],
-                                [{"text": "🧹 Clear All Trades", "callback_data": "clearall"}]
-                            ]}
-                            send_msg(f"👋 <b>Welcome to V69!</b>\nExchange: <b>{EXCHANGE.upper()}</b>\n\n✅ Auto-Scan ON (4/7 Score)\n🤖 <i>Type /testai to check AI</i>", markup)
-                        elif txt == "clearall":
-                            active_trades.clear()
-                            send_msg("✅ <b>All active trades cleared!</b> Bot will now find fresh signals.")
-                        elif txt == "/testai":
-                            send_msg("⏳ Testing AI API...")
-                            result = get_ai_verdict("BTC", "BUY", 7)
-                            send_msg(f"🤖 <b>AI Test Result:</b>\n{result}")
+                            show_menu(cid)
         except: pass
         time.sleep(2)
+
+def show_menu(cid):
+    markup = {"inline_keyboard": [
+        [{"text": "🪙 CoinDCX", "callback_data": "coindcx"}, {"text": "🪙 Coinbase", "callback_data": "coinbase"}],
+        [{"text": "📈 Stocks", "callback_data": "stocks"}, {"text": "🛢️ Commodities", "callback_data": "commodities"}],
+        [{"text": "🚀 SCAN NOW", "callback_data": "scan"}, {"text": "📊 Active Trades", "callback_data": "trades"}],
+        [{"text": "🧹 Clear All Trades", "callback_data": "clearall"}]
+    ]}
+    
+    mkt_name = {"coindcx": "CoinDCX (Crypto)", "coinbase": "Coinbase (Crypto)", "stocks": "Stocks", "commodities": "Commodities"}[CURRENT_MARKET]
+    
+    send_msg(f"👋 <b>All-in-One Master Bot</b>\n\nCurrent Market: <b>{mkt_name}</b>\n✅ Auto-Scan is ON (Every 5 Mins)\n\nSelect a market or scan now:", markup)
 
 # ================= MAIN =================
 if __name__ == "__main__":
