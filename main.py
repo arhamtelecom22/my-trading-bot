@@ -17,7 +17,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Full Market SMC Bot is Running 24/7!"
+    return "SMC Scoring Bot is Running 24/7!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -53,14 +53,12 @@ def load_coinbase_pairs():
             print(f"Loaded {len(ALL_SYMBOLS)} Coinbase Pairs.")
     except Exception as e:
         print("Error fetching pairs:", e)
-        # Fallback if API fails
         ALL_SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "ADA-USD", "AVAX-USD", "LINK-USD"]
 
 # ================= DATA FETCHERS =================
 def get_kline(sym, interval="15m", limit=200):
     try:
         if sym in COMMODITIES:
-            # Yahoo Finance for Commodities
             y_range = "5d" if interval == "15m" else "1mo"
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval={interval}&range={y_range}"
             res = requests.get(url, timeout=10).json()
@@ -80,7 +78,6 @@ def get_kline(sym, interval="15m", limit=200):
             df = pd.DataFrame(data)
             return df if len(df) >= 200 else None
         else:
-            # Coinbase
             gran = 900 if interval == "15m" else 3600
             url = f"https://api.exchange.coinbase.com/products/{sym}/candles?granularity={gran}"
             res = requests.get(url, timeout=10)
@@ -92,16 +89,14 @@ def get_kline(sym, interval="15m", limit=200):
                     for col in ['open', 'high', 'low', 'close', 'volume']: 
                         df[col] = df[col].astype(float)
                     return df.tail(limit)
-    except Exception as e:
-        pass
+    except: pass
     return None
 
 # ================= SMC INDICATORS =================
 def calculate_indicators(df):
     df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
-    df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     df['atr'] = (df['high'] - df['low']).rolling(window=14).mean()
-    df['atr'] = df['atr'].fillna(df['close'] * 0.002) # Fix NaN
+    df['atr'] = df['atr'].fillna(df['close'] * 0.002) 
     return df
 
 def calculate_smc(df):
@@ -182,65 +177,62 @@ def analyze_symbol(sym):
         df = calculate_smc(df)
         last = df.iloc[-1]
         
-        # BULLISH
+        # --- BULLISH SCORING ---
+        bull_score = 0
+        # 1. Sweep (within last 15 candles)
+        if df['sweep_bull'].iloc[-15:].any(): bull_score += 1
+        # 2. BOS (within last 10 candles)
         bos_bull_indices = df.index[df['bos_bull'] == True].tolist()
         recent_bos_bull = len(bos_bull_indices) > 0 and (len(df) - bos_bull_indices[-1] <= 10)
-        last_bos_idx = bos_bull_indices[-1] if recent_bos_bull else -1
-        
-        sweep_bull_before = False
-        if recent_bos_bull:
-            for s_idx in df.index[df['sweep_bull'] == True].tolist():
-                if s_idx < last_bos_idx and (last_bos_idx - s_idx) <= 20:
-                    sweep_bull_before = True; break
-                    
+        if recent_bos_bull: bull_score += 1
+        # 3. FVG/OB Retest (Check last 3 candles)
         in_zone_bull = False
         if recent_bos_bull:
+            last_bos_idx = bos_bull_indices[-1]
             for i in range(last_bos_idx, len(df)):
-                if df.iloc[i]['is_fvg_bull'] and last['low'] <= df.iloc[i]['fvg_bull_top'] and last['close'] >= df.iloc[i]['fvg_bull_bot']:
+                if df.iloc[i]['is_fvg_bull'] and df['low'].iloc[-3:].min() <= df.iloc[i]['fvg_bull_top']:
                     in_zone_bull = True; break
-                if not pd.isna(df.iloc[i]['ob_bull_top']) and last['low'] <= df.iloc[i]['ob_bull_top'] and last['close'] >= df.iloc[i]['ob_bull_bot']:
+                if not pd.isna(df.iloc[i]['ob_bull_top']) and df['low'].iloc[-3:].min() <= df.iloc[i]['ob_bull_top']:
                     in_zone_bull = True; break
-                    
-        # BEARISH
+        if in_zone_bull: bull_score += 1
+        
+        # --- BEARISH SCORING ---
+        bear_score = 0
+        if df['sweep_bear'].iloc[-15:].any(): bear_score += 1
         bos_bear_indices = df.index[df['bos_bear'] == True].tolist()
         recent_bos_bear = len(bos_bear_indices) > 0 and (len(df) - bos_bear_indices[-1] <= 10)
-        last_bos_bear_idx = bos_bear_indices[-1] if recent_bos_bear else -1
-        
-        sweep_bear_before = False
-        if recent_bos_bear:
-            for s_idx in df.index[df['sweep_bear'] == True].tolist():
-                if s_idx < last_bos_bear_idx and (last_bos_bear_idx - s_idx) <= 20:
-                    sweep_bear_before = True; break
-                    
+        if recent_bos_bear: bear_score += 1
         in_zone_bear = False
         if recent_bos_bear:
+            last_bos_bear_idx = bos_bear_indices[-1]
             for i in range(last_bos_bear_idx, len(df)):
-                if df.iloc[i]['is_fvg_bear'] and last['high'] >= df.iloc[i]['fvg_bear_bot'] and last['close'] <= df.iloc[i]['fvg_bear_top']:
+                if df.iloc[i]['is_fvg_bear'] and df['high'].iloc[-3:].max() >= df.iloc[i]['fvg_bear_bot']:
                     in_zone_bear = True; break
-                if not pd.isna(df.iloc[i]['ob_bear_top']) and last['high'] >= df.iloc[i]['ob_bear_bot'] and last['close'] <= df.iloc[i]['ob_bear_top']:
+                if not pd.isna(df.iloc[i]['ob_bear_top']) and df['high'].iloc[-3:].max() >= df.iloc[i]['ob_bear_bot']:
                     in_zone_bear = True; break
+        if in_zone_bear: bear_score += 1
 
         sig = None
-        if recent_bos_bull and sweep_bull_before and in_zone_bull and last['close'] > last['open']:
+        # MTF is the 4th check. If 3 out of 4 match, we take it.
+        if bull_score >= 2 and last['close'] > last['open']: # Need at least 2/3 base points + MTF
             if get_mtf_trend(sym) == "BUY": sig = "BUY"
-        elif recent_bos_bear and sweep_bear_before and in_zone_bear and last['close'] < last['open']:
+        elif bear_score >= 2 and last['close'] < last['open']:
             if get_mtf_trend(sym) == "SELL": sig = "SELL"
             
         return (sig, df, last) if sig else None
     except: return None
 
 def scan_market(is_manual=False, manual_chat_id=None):
-    print(f"[{time.strftime('%H:%M:%S')}] Scanning Full Market + Commodities...")
+    print(f"[{time.strftime('%H:%M:%S')}] Scanning Full Market SMC Scoring...")
     found = 0
     all_to_scan = ALL_SYMBOLS + COMMODITIES
     
-    # Use ThreadPool to scan fast without crashing
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         results = list(executor.map(analyze_symbol, all_to_scan))
         
     for i, res in enumerate(results):
         if res is None: continue
-        if found >= 3: break # Limit to 3 signals per scan to avoid spam
+        if found >= 3: break
         
         sig, df, last = res
         sym = all_to_scan[i]
@@ -299,12 +291,12 @@ def scan_market(is_manual=False, manual_chat_id=None):
         time.sleep(3)
             
     if is_manual and manual_chat_id:
-        send_msg(f"✅ Full Scan Complete. Found {found} signals.", chat_id=manual_chat_id)
+        send_msg(f"✅ Full SMC Scan Complete. Found {found} signals.", chat_id=manual_chat_id)
 
 def bot_loop():
     while True:
         scan_market(False)
-        time.sleep(600) # 10 mins (Full market scan takes time)
+        time.sleep(600)
 
 # ================= MONITOR =================
 def monitor():
@@ -345,7 +337,7 @@ def commands():
                                     del active_trades[sym]
                                     send_msg(f"🛑 Trade Manually Closed.")
                             elif txt == "scan":
-                                send_msg("⏳ Full Market SMC Scan starting... (Please wait 1-2 mins)")
+                                send_msg("⏳ Full Market SMC Scoring Scan starting...")
                                 Thread(target=scan_market, args=(True, cid)).start()
                             elif txt == "trades":
                                 if not active_trades: 
@@ -372,13 +364,13 @@ def commands():
                                 [{"text": "📊 Active Trades", "callback_data": "trades"}],
                                 [{"text": "🧹 Clear All Trades", "callback_data": "clearall"}]
                             ]}
-                            send_msg(f"👋 <b>Full Market SMC Bot</b>\n\n✅ Total Coins: {len(ALL_SYMBOLS)}\n✅ Commodities: Gold, Silver, Oil, Copper\n\nClick 'Scan Now' to search the entire market:", markup)
+                            send_msg(f"👋 <b>Full SMC Scoring Bot</b>\n\n✅ Total Coins: {len(ALL_SYMBOLS)}\n✅ Commodities: Gold, Silver, Oil, Copper\n\nClick 'Scan Now':", markup)
         except: pass
         time.sleep(2)
 
 # ================= MAIN =================
 if __name__ == "__main__":
-    load_coinbase_pairs() # Fetch all pairs on startup
+    load_coinbase_pairs()
     keep_alive()
     Thread(target=monitor).start()
     Thread(target=commands).start()
