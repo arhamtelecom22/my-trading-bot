@@ -17,7 +17,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "SMC Bot is Running 24/7!"
+    return "Trend Master Bot is Running 24/7!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -29,7 +29,7 @@ def keep_alive():
 # ================= GLOBAL VARIABLES =================
 active_trades = {}
 ALL_SYMBOLS = [] 
-COMMODITIES = ["GC=F", "SI=F", "CL=F", "HG=F"] 
+COMMODITIES = ["GC=F", "SI=F", "CL=F", "HG=F"] # Gold, Silver, Oil, Copper
 
 def fmt(p):
     try:
@@ -40,7 +40,7 @@ def fmt(p):
         return f"{p:.6f}"
     except: return str(p)
 
-# ================= FETCH ALL COINBASE PAIRS =================
+# ================= FETCH COINBASE PAIRS =================
 def load_coinbase_pairs():
     global ALL_SYMBOLS
     print("Fetching Coinbase Pairs...")
@@ -48,9 +48,8 @@ def load_coinbase_pairs():
         res = requests.get("https://api.exchange.coinbase.com/products", timeout=10)
         if res.status_code == 200:
             products = res.json()
-            # Only take active USD pairs, limit to top 100 to avoid extreme rate limits
             pairs = [p['id'] for p in products if p['quote_currency'] == 'USD' and p['status'] == 'online']
-            ALL_SYMBOLS = pairs[:100] # Scan top 100
+            ALL_SYMBOLS = pairs[:80] # Top 80 coins to avoid rate limits
             print(f"Loaded {len(ALL_SYMBOLS)} Coinbase Pairs.")
     except Exception as e:
         print("Error fetching pairs:", e)
@@ -60,7 +59,7 @@ def load_coinbase_pairs():
 def get_kline(sym, interval="15m", limit=100):
     try:
         if sym in COMMODITIES:
-            y_range = "5d" if interval == "15m" else "1mo"
+            y_range = "5d"
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval={interval}&range={y_range}"
             res = requests.get(url, timeout=10).json()
             result = res['chart']['result'][0]
@@ -92,29 +91,24 @@ def get_kline(sym, interval="15m", limit=100):
     except: pass
     return None
 
-# ================= SMC INDICATORS =================
+# ================= INDICATORS =================
 def calculate_indicators(df):
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
-    df['ema200'] = df['close'].ewm(span=200, adjust=False).mean() # If <200 candles, it uses available
-    df['atr'] = (df['high'] - df['low']).rolling(window=14).mean()
-    df['atr'] = df['atr'].fillna(df['close'] * 0.002) 
+    df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
+    
+    df['ema12'] = df['close'].ewm(span=12, adjust=False).mean()
+    df['ema26'] = df['close'].ewm(span=26, adjust=False).mean()
+    df['macd'] = df['ema12'] - df['ema26']
+    df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
-    return df
-
-def calculate_smc(df):
-    df['swing_high'] = df['high'].rolling(5).max().shift(1)
-    df['swing_low'] = df['low'].rolling(5).min().shift(1)
     
-    # Simplified Sweep & BOS
-    df['sweep_bull'] = (df['low'] < df['swing_low']) & (df['close'] > df['swing_low'])
-    df['sweep_bear'] = (df['high'] > df['swing_high']) & (df['close'] < df['swing_high'])
-    df['bos_bull'] = df['close'] > df['swing_high']
-    df['bos_bear'] = df['close'] < df['swing_low']
+    df['atr'] = (df['high'] - df['low']).rolling(window=14).mean()
+    df['atr'] = df['atr'].fillna(df['close'] * 0.002) 
     return df
 
 # ================= TELEGRAM =================
@@ -140,28 +134,28 @@ def send_photo(img, caption, markup=None, chat_id=TG_CHAT_ID):
 def analyze_symbol(sym):
     if sym in active_trades: return None
     try:
-        df = get_kline(sym, "15m", 100) # Only fetch 100 candles to avoid limit
+        df = get_kline(sym, "15m", 100)
         if df is None or len(df) < 50: return None
         
         df = calculate_indicators(df)
-        df = calculate_smc(df)
         last = df.iloc[-1]
         
-        # Simplified SMC Entry Logic
-        # Sweep happened in last 10 candles
-        recent_sweep_bull = df['sweep_bull'].iloc[-10:].any()
-        recent_sweep_bear = df['sweep_bear'].iloc[-10:].any()
+        # 5 Strong Conditions
+        ema_buy = last['close'] > last['ema200'] and last['ema50'] > last['ema200']
+        ema_sell = last['close'] < last['ema200'] and last['ema50'] < last['ema200']
         
-        # BOS happened in last 5 candles
-        recent_bos_bull = df['bos_bull'].iloc[-5:].any()
-        recent_bos_bear = df['bos_bear'].iloc[-5:].any()
-
+        macd_buy = last['macd'] > last['macd_signal']
+        macd_sell = last['macd'] < last['macd_signal']
+        
+        rsi_buy = last['rsi'] > 50
+        rsi_sell = last['rsi'] < 50
+        
+        vol_spike = last['volume'] > (df['volume'].tail(20).mean() * 1.1)
+        
         sig = None
-        # BUY: Sweep Low -> BOS Up -> RSI > 45 -> Green Candle
-        if recent_sweep_bull and recent_bos_bull and last['rsi'] > 45 and last['close'] > last['open']:
+        if ema_buy and macd_buy and rsi_buy and vol_spike and last['close'] > last['open']:
             sig = "BUY"
-        # SELL: Sweep High -> BOS Down -> RSI < 55 -> Red Candle
-        elif recent_sweep_bear and recent_bos_bear and last['rsi'] < 55 and last['close'] < last['open']:
+        elif ema_sell and macd_sell and rsi_sell and vol_spike and last['close'] < last['open']:
             sig = "SELL"
             
         return (sig, df, last) if sig else None
@@ -183,13 +177,14 @@ def send_signal(sym, sig, df, last, is_manual=False, manual_chat_id=None):
     link = f"https://www.coinbase.com/advanced-trade/spot/{sym}" if sym not in COMMODITIES else f"https://finance.yahoo.com/quote/{sym}"
     
     text = (
-        f"<b>🧠 SMC: {clean_sym} {sig}</b>\n\n"
+        f"<b>🔥 TREND SIGNAL: {clean_sym} {sig}</b>\n\n"
         f"💰 <b>Entry:</b> {fmt(entry)}\n"
         f"🛑 <b>SL:</b> {fmt(sl)}\n"
         f"🎯 <b>TP1:</b> {fmt(tp1)}\n"
         f"🎯 <b>TP2:</b> {fmt(tp2)}\n"
         f"🎯 <b>TP3:</b> {fmt(tp3)}\n\n"
-        f"⚡️ <b>Setup:</b> Sweep + BOS Confirmed"
+        f"📊 <b>RSI:</b> {last['rsi']:.1f}\n"
+        f"⚡️ <b>Setup:</b> EMA + MACD + RSI + Vol"
     )
     
     markup = {"inline_keyboard": [[{"text": f"📋 Copy", "copy_text": {"text": clean_sym}}], [{"text": "📈 Open Chart", "url": link}], [{"text": "❌ Close", "callback_data": f"close_{sym}"}]]}
@@ -227,7 +222,7 @@ def scan_market(is_manual=False, manual_chat_id=None):
         
     for i, res in enumerate(results):
         if res is None: continue
-        if found >= 3: break # Max 3 signals
+        if found >= 3: break 
         
         sig, df, last = res
         sym = all_to_scan[i]
@@ -241,7 +236,7 @@ def scan_market(is_manual=False, manual_chat_id=None):
 def bot_loop():
     while True:
         scan_market(False)
-        time.sleep(600)
+        time.sleep(300) # Scan every 5 mins
 
 # ================= MONITOR =================
 def monitor():
@@ -283,12 +278,14 @@ def commands():
                             elif txt == "scan":
                                 send_msg("⏳ Full Market Scan starting...")
                                 Thread(target=scan_market, args=(True, cid)).start()
-                            elif txt == "test":
-                                # Dummy signal for testing
-                                dummy_df = pd.DataFrame({'open':[100,101], 'high':[102,103], 'low':[99,100], 'close':[101,102], 'volume':[1000,2000], 'atr':[1,1]})
-                                dummy_last = dummy_df.iloc[-1]
-                                send_signal("BTC-USD", "BUY", dummy_df, dummy_last, True, cid)
-                                send_msg("✅ Test Signal Sent! Bot is working.", chat_id=cid)
+                            elif txt == "test_btc":
+                                send_msg("⏳ Scanning BTC-USD right now...")
+                                res = analyze_symbol("BTC-USD")
+                                if res:
+                                    sig, df, last = res
+                                    send_signal("BTC-USD", sig, df, last, True, cid)
+                                else:
+                                    send_msg("⚠️ BTC-USD currently has no valid signal (Conditions not met).")
                             elif txt == "trades":
                                 if not active_trades: send_msg("💤 No active trades.")
                                 else:
@@ -310,11 +307,11 @@ def commands():
                         if txt in ["/start", "/menu"]:
                             markup = {"inline_keyboard": [
                                 [{"text": "🚀 SCAN NOW (Full Market)", "callback_data": "scan"}],
-                                [{"text": "🧪 Send Test Signal", "callback_data": "test"}],
+                                [{"text": "🧪 Scan BTC Only", "callback_data": "test_btc"}],
                                 [{"text": "📊 Active Trades", "callback_data": "trades"}],
                                 [{"text": "🧹 Clear All Trades", "callback_data": "clearall"}]
                             ]}
-                            send_msg(f"👋 <b>Coinbase SMC Bot (V78)</b>\n\n✅ Coins Loaded: {len(ALL_SYMBOLS)}\n\nScan the market or test if the bot is alive:", markup)
+                            send_msg(f"👋 <b>Trend Master Bot (Real Signals)</b>\n\n✅ Coins Loaded: {len(ALL_SYMBOLS)}\n\nBot is running in background (5 min interval).", markup)
         except: pass
         time.sleep(2)
 
